@@ -1,0 +1,16 @@
+application_id,customer_id,requested_amount,purpose,application_date,status,loan_officer_id,term_years,requested_rate_type
+APP-3001,C001,400000.0,Build-out and equipment for second Rosa's Bakery location,2026-07-15,Under Review,EMP001,10,Fixed
+APP-3002,C061,31108.47,New location build-out,2025-04-05,Withdrawn,EMP002,5,Fixed
+APP-3003,C033,349045.27,Equipment purchase,2026-04-13,Funded,EMP007,3,Variable
+APP-3004,C078,24275.06,New location build-out,2025-12-11,Under Review,EMP001,10,Variable
+APP-3005,C017,499987.97,Inventory financing,2025-09-08,Approved,EMP001,3,Variable
+APP-3006,C003,348462.52,Equipment purchase,2026-03-21,Approved,EMP001,5,Variable
+APP-3007,C076,59591.33,Working capital,2026-06-20,Approved,EMP006,3,Variable
+APP-3008,C069,353265.38,Facility expansion,2026-05-29,Declined,EMP006,5,Fixed
+APP-3009,C074,110774.03,Facility expansion,2025-01-13,Approved,EMP006,5,Variable
+APP-3010,C014,386066.79,Facility expansion,2026-02-27,Withdrawn,EMP001,10,Variable
+APP-3011,C018,200029.67,Fleet acquisition,2025-09-14,Under Review,EMP006,10,Variable
+APP-3012,C035,231976.04,Refinance existing debt,2025-02-24,Approved,EMP001,5,Variable
+APP-3013,C071,442992.6,Refinance existing debt,2025-01-17,Declined,EMP001,5,Fixed
+APP-3014,C054,333256.77,Fleet acquisition,2026-04-03,Funded,EMP006,3,Fixed
+APP-3015,C075,481266.76,Inventory financing,2025-05-25,Approved,EMP006,3,Variable

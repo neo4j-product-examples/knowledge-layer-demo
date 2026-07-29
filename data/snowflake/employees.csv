@@ -1,0 +1,11 @@
+employee_id,full_name,role,branch_id,hire_date
+EMP001,David Kim,Loan Officer,BR01,2016-04-01
+EMP002,Jamie Arnold,Relationship Manager,BR01,2015-01-03
+EMP003,Lisa Hensley,Branch Manager,BR02,2012-04-19
+EMP004,Michele Williams,Branch Manager,BR02,2022-03-26
+EMP005,Dylan Miller,Branch Manager,BR03,2019-06-19
+EMP006,Brian Ramirez,Relationship Manager,BR03,2010-09-02
+EMP007,Holly Wood,Relationship Manager,BR04,2015-03-21
+EMP008,Derek Zuniga,Branch Manager,BR04,2023-07-03
+EMP009,Lisa Jackson,Branch Manager,BR05,2014-06-17
+EMP010,Carla Gray,Branch Manager,BR05,2024-07-29

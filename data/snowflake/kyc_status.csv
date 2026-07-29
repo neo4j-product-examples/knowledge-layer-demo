@@ -1,0 +1,81 @@
+customer_id,kyc_status,last_review_date,risk_rating,notes
+C001,Verified,2026-01-10,Low,Standard annual KYC refresh completed; no flags
+C002,Verified,2025-11-02,Medium,Elevated monitoring due to open delinquency on LOC-2002
+C003,Verified,2025-07-19,High,"Concentration risk noted, no action required"
+C004,Verified,2025-08-22,High,Routine annual review pending
+C005,Verified,2025-11-02,Low,No flags
+C006,Verified,2025-02-18,Low,No flags
+C007,Pending Review,2026-03-31,Medium,"Concentration risk noted, no action required"
+C008,Verified,2026-01-04,Low,No flags
+C009,Verified,2025-03-23,Low,No flags
+C010,Verified,2025-07-30,Medium,Elevated transaction monitoring
+C011,Verified,2025-02-04,Low,No flags
+C012,Verified,2025-11-29,Low,No flags
+C013,Verified,2025-11-13,Low,No flags
+C014,Verified,2025-04-15,Low,No flags
+C015,Pending Review,2025-03-27,Low,No flags
+C016,Pending Review,2026-06-04,Low,No flags
+C017,Verified,2025-01-20,Medium,Routine annual review pending
+C018,Verified,2026-04-01,Low,No flags
+C019,Verified,2025-07-01,Low,No flags
+C020,Pending Review,2026-01-15,Low,No flags
+C021,Verified,2025-10-02,Low,No flags
+C022,Pending Review,2025-07-01,Medium,Routine annual review pending
+C023,Verified,2025-05-19,Medium,Routine annual review pending
+C024,Verified,2026-01-01,Low,No flags
+C025,Verified,2025-06-11,Medium,Routine annual review pending
+C026,Verified,2025-02-21,Low,No flags
+C027,Verified,2025-08-08,Medium,"Concentration risk noted, no action required"
+C028,Verified,2025-09-23,Medium,"Concentration risk noted, no action required"
+C029,Verified,2025-02-02,Low,No flags
+C030,Verified,2026-05-20,Low,No flags
+C031,Verified,2025-07-15,Low,No flags
+C032,Verified,2026-07-18,Low,No flags
+C033,Verified,2026-01-10,Medium,Routine annual review pending
+C034,Verified,2025-03-09,High,"Concentration risk noted, no action required"
+C035,Pending Review,2025-08-10,Medium,Elevated transaction monitoring
+C036,Verified,2025-07-28,Low,No flags
+C037,Verified,2025-01-04,Low,No flags
+C038,Verified,2025-02-02,Low,No flags
+C039,Verified,2026-06-03,High,"Concentration risk noted, no action required"
+C040,Verified,2025-03-07,Low,No flags
+C041,Pending Review,2025-04-07,High,"Concentration risk noted, no action required"
+C042,Pending Review,2025-06-28,Low,No flags
+C043,Pending Review,2025-09-07,Low,No flags
+C044,Verified,2025-12-15,Low,No flags
+C045,Verified,2025-03-14,Low,No flags
+C046,Verified,2026-05-14,Low,No flags
+C047,Verified,2025-01-20,Low,No flags
+C048,Verified,2026-07-15,Low,No flags
+C049,Verified,2026-03-26,Low,No flags
+C050,Pending Review,2025-09-05,Low,No flags
+C051,Verified,2025-05-09,High,Routine annual review pending
+C052,Verified,2025-07-18,Low,No flags
+C053,Verified,2026-01-19,Low,No flags
+C054,Verified,2026-02-07,Low,No flags
+C055,Verified,2025-06-10,Low,No flags
+C056,Verified,2025-06-14,Medium,Elevated transaction monitoring
+C057,Verified,2026-05-21,Low,No flags
+C058,Verified,2025-09-19,Low,No flags
+C059,Verified,2025-10-20,Low,No flags
+C060,Verified,2025-07-08,Low,No flags
+C061,Verified,2025-06-03,Low,No flags
+C062,Verified,2025-12-05,Low,No flags
+C063,Verified,2025-02-02,Low,No flags
+C064,Verified,2026-03-08,Low,No flags
+C065,Verified,2025-09-08,Medium,Routine annual review pending
+C066,Pending Review,2026-07-24,Low,No flags
+C067,Verified,2025-09-06,Medium,Elevated transaction monitoring
+C068,Verified,2025-04-01,Low,No flags
+C069,Verified,2025-05-20,Low,No flags
+C070,Pending Review,2025-12-09,Medium,"Concentration risk noted, no action required"
+C071,Verified,2025-12-09,High,Routine annual review pending
+C072,Verified,2026-07-11,Medium,Elevated transaction monitoring
+C073,Verified,2025-03-31,Medium,"Concentration risk noted, no action required"
+C074,Verified,2025-11-16,Low,No flags
+C075,Verified,2025-09-04,Medium,Elevated transaction monitoring
+C076,Verified,2025-01-09,Low,No flags
+C077,Verified,2026-01-14,Low,No flags
+C078,Verified,2025-09-19,Low,No flags
+C079,Verified,2025-01-26,Low,No flags
+C080,Verified,2026-04-01,Medium,Elevated transaction monitoring
