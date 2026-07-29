@@ -1,2 +1,5 @@
 # knowledge-layer-demo
-Steggy can write
+
+Key information:
+
+[Demo narrative](docs/DEMO_NARRATIVE.md)
