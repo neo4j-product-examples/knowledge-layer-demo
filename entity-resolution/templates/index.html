@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Entity Resolution — Meridian &amp; Documents</title>
+  <style>
+    html, body { height: 100%; }
+    body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: #0b0c10; color: #eee; }
+    header { padding: 16px 24px; border-bottom: 1px solid #2a2c33; display: flex; align-items: center; gap: 16px; background: #14161c; }
+    header h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 600; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; border-radius: 4px; background: #4C8BF5; color: white; }
+    button:hover { background: #3a76e0; }
+    #status { font-size: 13px; color: #aaa; }
+    #error-banner { background: #fdecea; color: #9c1f18; padding: 10px 24px; display: none; }
+    #graph { width: 100%; height: calc(100vh - 92px); background: #0b0c10; }
+    .legend { padding: 8px 24px; font-size: 12px; color: #aaa; background: #14161c; border-bottom: 1px solid #2a2c33; }
+    .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 16px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div id="error-banner">{{ error or "" }}</div>
+  <header>
+    <h1>Entity Resolution — Meridian ↔ Documents</h1>
+    <span id="status"></span>
+    <button id="upload-btn">Upload Document</button>
+  </header>
+  <div class="legend">
+    <span><span class="dot" style="background:#4C8BF5"></span>meridian</span>
+    <span><span class="dot" style="background:#F59E4C"></span>documents</span>
+    &nbsp;— rendered with Neo4j's own visualization library (NVL, the same engine behind Bloom).
+  </div>
+  <div id="graph"></div>
+
+  <script type="module">
+    import { NVL } from 'https://esm.sh/@neo4j-nvl/base';
+    import {
+      PanInteraction, ZoomInteraction, DragNodeInteraction, ClickInteraction,
+    } from 'https://esm.sh/@neo4j-nvl/interaction-handlers';
+
+    {% if error %}
+    document.getElementById('error-banner').style.display = 'block';
+    {% endif %}
+
+    let nvl = null;
+    let interactions = [];
+    const container = document.getElementById('graph');
+    const statusEl = document.getElementById('status');
+
+    function attachInteractions(nvlInstance) {
+      interactions.forEach(i => i.destroy?.());
+      interactions = [
+        new PanInteraction(nvlInstance),
+        new ZoomInteraction(nvlInstance),
+        new DragNodeInteraction(nvlInstance),
+        new ClickInteraction(nvlInstance),
+      ];
+    }
+
+    function toNvlElements(data) {
+      const nodes = data.nodes.map(n => ({
+        id: n.id,
+        caption: n.label,
+        color: n.color,
+        size: 20,
+      }));
+      const relationships = data.edges.map((e, i) => ({
+        id: `rel-${i}`,
+        from: e.from,
+        to: e.to,
+        caption: e.label,
+        color: '#666',
+        width: 2,
+      }));
+      return { nodes, relationships };
+    }
+
+    async function loadGraph() {
+      statusEl.textContent = 'Loading graph…';
+      const res = await fetch('/api/graph');
+      const data = await res.json();
+      if (data.error) {
+        statusEl.textContent = data.error;
+        return;
+      }
+      const { nodes, relationships } = toNvlElements(data);
+      if (nvl) {
+        nvl.destroy();
+      }
+      nvl = new NVL(container, nodes, relationships, {
+        layout: 'forceDirected',
+        initialZoom: 1,
+        backgroundColor: '#0b0c10',
+      });
+      attachInteractions(nvl);
+      const matchCount = data.edges.filter(e => e.dashes).length;
+      const structuralCount = data.edges.length - matchCount;
+      statusEl.textContent = `${data.nodes.length} shadow nodes, ${structuralCount} structural edges, ${matchCount} SIMILAR_TO matches`;
+    }
+
+    document.getElementById('upload-btn').addEventListener('click', async () => {
+      statusEl.textContent = 'Processing document…';
+      const res = await fetch('/process', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        statusEl.textContent = data.error;
+        return;
+      }
+      statusEl.textContent = `Matched ${data.customerMatches} customers, ${data.accountMatches} accounts. Refreshing graph…`;
+      await loadGraph();
+    });
+
+    loadGraph();
+  </script>
+</body>
+</html>

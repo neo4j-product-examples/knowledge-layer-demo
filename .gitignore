@@ -1,3 +1,13 @@
+# Handoff notes (internal working doc, not a deliverable)
+HANDOFF.md
+
+# Snowflake key-pair auth secrets — never commit
+snowkey.p8
+snowkey.pub
+
+# macOS
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
