@@ -162,8 +162,6 @@
     let nvl = null;
     let interactions = [];
     let relCounter = 0;
-    let matchedCustomerId = null;
-    let chatStep = 0; // 1 = ready to find customer, 2 = ready to find parent companies, 3 = done
 
     const uploadBtn = document.getElementById('upload-btn');
     const graphContainer = document.getElementById('graph');
@@ -239,12 +237,6 @@
       chatInput.disabled = false;
     }
 
-    function disableChat(placeholder) {
-      chatInput.value = '';
-      chatInput.placeholder = placeholder;
-      chatInput.disabled = true;
-    }
-
     uploadBtn.addEventListener('click', async () => {
       uploadBtn.disabled = true;
       uploadBtn.textContent = 'Uploading…';
@@ -270,7 +262,6 @@
 
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
-        chatStep = 1;
         enableChat();
         addSuggestion("Find the customer that matches Rosa's Bakery");
       } catch (e) {
@@ -286,70 +277,30 @@
       chatInput.value = '';
       chatInput.disabled = true;
 
-      if (chatStep === 1) {
-        const thinking = addThinkingMessage();
-        try {
-          const res = await fetch('/api/find-customer', { method: 'POST' });
-          const data = await res.json();
-          thinking.remove();
-          if (data.error) {
-            addMessage('assistant', data.error);
-            chatInput.disabled = false;
-            return;
-          }
-          if (data.matches.length === 0) {
-            addMessage('assistant', "No match found for Rosa's Bakery in the banking data.");
-            chatInput.disabled = false;
-            return;
-          }
-          const summary = data.matches
-            .map(m => `${m.meridianName} (${Math.round(m.confidence * 100)}% confidence)`)
-            .join(', ');
-          addMessage('assistant', `Found a match: ${summary}.`);
-
-          const customerMatch = data.matches.find(m => m.kind === 'customer');
-          matchedCustomerId = customerMatch ? customerMatch.meridianId : null;
-
+      const thinking = addThinkingMessage();
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+        const data = await res.json();
+        thinking.remove();
+        if (data.error) {
+          addMessage('assistant', data.error);
+          return;
+        }
+        addMessage('assistant', data.reply || '(no response)');
+        if (data.graph && data.graph.nodes && data.graph.nodes.length) {
           const { nodes, relationships } = toNvlElements(data.graph);
           nvl.addAndUpdateElementsInGraph(nodes, relationships);
-
-          if (matchedCustomerId) {
-            chatStep = 2;
-            enableChat();
-            addSuggestion('Find parent companies');
-          } else {
-            disableChat('More questions coming soon');
-          }
-        } catch (e) {
-          thinking.remove();
-          addMessage('assistant', 'Something went wrong finding the customer.');
-          chatInput.disabled = false;
         }
-      } else if (chatStep === 2) {
-        const thinking = addThinkingMessage();
-        try {
-          const res = await fetch('/api/find-parent-companies', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customerId: matchedCustomerId }),
-          });
-          const data = await res.json();
-          thinking.remove();
-          if (data.error) {
-            addMessage('assistant', data.error);
-            chatInput.disabled = false;
-            return;
-          }
-          addMessage('assistant', data.summary);
-          const { nodes, relationships } = toNvlElements(data.graph);
-          nvl.addAndUpdateElementsInGraph(nodes, relationships);
-          chatStep = 3;
-          disableChat('More questions coming soon');
-        } catch (e) {
-          thinking.remove();
-          addMessage('assistant', 'Something went wrong looking up parent companies.');
-          chatInput.disabled = false;
-        }
+      } catch (e) {
+        thinking.remove();
+        addMessage('assistant', 'Something went wrong talking to the assistant.');
+      } finally {
+        chatInput.disabled = false;
+        chatInput.focus();
       }
     }
 
