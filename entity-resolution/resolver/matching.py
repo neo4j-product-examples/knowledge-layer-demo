@@ -279,6 +279,31 @@ def fetch_document_co_owns(session):
     return [dict(r) for r in result]
 
 
+def fetch_meridian_customer_facilities(session):
+    """Customer-[:HAS_FACILITY]->LoanFacility rows, for spotting delinquency
+    on a customer discovered via the corporate hierarchy."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:HAS_FACILITY]->(f:LoanFacility)
+        RETURN c.customerId AS customerId, f.facilityId AS facilityId,
+               f.paymentStatus AS paymentStatus, f.daysPastDue AS daysPastDue
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_customer_kyc(session):
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:HAS_KYC_STATUS]->(k:KYCStatus)
+        RETURN c.customerId AS customerId, k.riskRating AS riskRating, k.notes AS notes
+        """
+    )
+    return [dict(r) for r in result]
+
+
 def fetch_document_ownership(session):
     """Person-[:OWNS {pct, role}]->Organization pairs (e.g. Rosa/Marcus
     Alvarez owning Rosa's Bakery) — mirrors fetch_meridian_account_ownership

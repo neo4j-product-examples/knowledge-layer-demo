@@ -10,6 +10,13 @@ RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels
        n.componentId AS componentId, n.customerName AS customerName, n.name AS name
 """
 
+_FETCH_DOCUMENTS_NODES = """
+USE meridianComposite.shadowDb
+MATCH (n:Shadow {sourceGraph: 'documents'})
+RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
+       n.componentId AS componentId, n.customerName AS customerName, n.name AS name
+"""
+
 # Directed MATCH (not `-[r]-`) so `from`/`to` reflect the relationship's real
 # stored direction instead of being reconstructed by guesswork.
 _FETCH_EDGES = f"""
@@ -20,7 +27,30 @@ RETURN a.sourceGraph AS fromSourceGraph, a.sourceId AS fromSourceId,
        type(r) AS relType, r.confidence AS confidence, r.matchType AS matchType
 """
 
+_FETCH_DOCUMENTS_EDGES = f"""
+USE meridianComposite.shadowDb
+MATCH (a:Shadow {{sourceGraph: 'documents'}})-[r:{_REL_TYPE_PATTERN}]->(b:Shadow {{sourceGraph: 'documents'}})
+RETURN a.sourceGraph AS fromSourceGraph, a.sourceId AS fromSourceId,
+       b.sourceGraph AS toSourceGraph, b.sourceId AS toSourceId,
+       type(r) AS relType, r.confidence AS confidence, r.matchType AS matchType
+"""
+
+_FETCH_HIERARCHY_NEIGHBORHOOD = """
+USE meridianComposite.shadowDb
+MATCH (start:Shadow:Customer {{sourceGraph: 'meridian', sourceId: $customerId}})
+MATCH (start)-[:HAS_PARENT*1..{max_hops}]-(other:Shadow:Customer)
+RETURN DISTINCT other.sourceId AS sourceId, other.customerName AS customerName
+"""
+
+_FETCH_HIERARCHY_EDGES = """
+USE meridianComposite.shadowDb
+MATCH (a:Shadow:Customer)-[:HAS_PARENT]->(b:Shadow:Customer)
+WHERE a.sourceId IN $ids AND b.sourceId IN $ids
+RETURN a.sourceId AS fromId, b.sourceId AS toId
+"""
+
 _GROUP_COLORS = {"meridian": "#4C8BF5", "documents": "#F59E4C"}
+_RISK_COLOR = "#E5484D"
 
 
 def _node_id(source_graph, source_id):
@@ -60,7 +90,82 @@ def build_vis_graph(node_rows, edge_rows):
     return {"nodes": list(nodes.values()), "edges": edges}
 
 
+def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
+    """Graph delta revealing the meridian side of each match (the documents
+    side is assumed already on the canvas from the documents-only view)."""
+    nodes = {}
+    edges = []
+    for m in matches:
+        meridian_id = m["meridian_id"]
+        nid = _node_id("meridian", meridian_id)
+        if meridian_id in meridian_customer_by_id:
+            label = f"Customer: {meridian_customer_by_id[meridian_id].get('customerName')}"
+        elif meridian_id in meridian_account_by_id:
+            label = f"Account: {meridian_id}"
+        else:
+            label = meridian_id
+        nodes[nid] = {
+            "id": nid,
+            "label": label,
+            "group": "meridian",
+            "color": _GROUP_COLORS["meridian"],
+            "componentId": None,
+        }
+        edges.append({
+            "from": nid,
+            "to": _node_id("documents", m["documents_id"]),
+            "label": m["matchType"],
+            "title": f"confidence: {m['confidence']}",
+            "dashes": True,
+        })
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
+    """Graph delta revealing the corporate-hierarchy neighborhood of an
+    already-shadowed customer. Risk-flagged customers (e.g. with a
+    delinquent facility) render in a distinct color."""
+    risk_customer_ids = risk_customer_ids or set()
+    nodes = {}
+    for row in hierarchy_rows:
+        source_id = row["sourceId"]
+        nid = _node_id("meridian", source_id)
+        nodes[nid] = {
+            "id": nid,
+            "label": f"Customer: {row.get('customerName') or source_id}",
+            "group": "meridian",
+            "color": _RISK_COLOR if source_id in risk_customer_ids else _GROUP_COLORS["meridian"],
+            "componentId": None,
+        }
+    edges = [
+        {
+            "from": _node_id("meridian", row["fromId"]),
+            "to": _node_id("meridian", row["toId"]),
+            "label": "HAS_PARENT",
+            "title": "HAS_PARENT",
+            "dashes": False,
+        }
+        for row in edge_rows
+    ]
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
 def fetch_graph_json(session):
     node_rows = [dict(r) for r in session.run(_FETCH_NODES)]
     edge_rows = [dict(r) for r in session.run(_FETCH_EDGES)]
     return build_vis_graph(node_rows, edge_rows)
+
+
+def fetch_documents_graph_json(session):
+    node_rows = [dict(r) for r in session.run(_FETCH_DOCUMENTS_NODES)]
+    edge_rows = [dict(r) for r in session.run(_FETCH_DOCUMENTS_EDGES)]
+    return build_vis_graph(node_rows, edge_rows)
+
+
+def fetch_hierarchy_neighborhood(session, customer_id, max_hops=4):
+    query = _FETCH_HIERARCHY_NEIGHBORHOOD.format(max_hops=max_hops)
+    return [dict(r) for r in session.run(query, customerId=customer_id)]
+
+
+def fetch_hierarchy_edges(session, ids):
+    return [dict(r) for r in session.run(_FETCH_HIERARCHY_EDGES, ids=list(ids))]

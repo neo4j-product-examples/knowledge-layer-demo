@@ -181,6 +181,29 @@ def test_fetch_meridian_customer_hierarchy_uses_meridian_constituent(fake_sessio
     assert "USE meridianComposite.meridian" in query
 
 
+def test_fetch_meridian_customer_facilities_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "HAS_FACILITY",
+        [{"customerId": "C002", "facilityId": "LOC-2002", "paymentStatus": "Delinquent", "daysPastDue": 62}],
+    )
+
+    rows = matching.fetch_meridian_customer_facilities(fake_session)
+
+    assert rows == [{"customerId": "C002", "facilityId": "LOC-2002", "paymentStatus": "Delinquent", "daysPastDue": 62}]
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_customer_kyc_uses_meridian_constituent(fake_session):
+    fake_session.when("HAS_KYC_STATUS", [{"customerId": "C001", "riskRating": "Low", "notes": "No flags"}])
+
+    rows = matching.fetch_meridian_customer_kyc(fake_session)
+
+    assert rows == [{"customerId": "C001", "riskRating": "Low", "notes": "No flags"}]
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
 def test_fetch_document_ownership_uses_documents_constituent(fake_session):
     fake_session.when(
         "MATCH (p:Person)-[r:OWNS]->(o:Organization)",

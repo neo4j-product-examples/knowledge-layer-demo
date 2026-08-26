@@ -71,6 +71,73 @@ def test_build_vis_graph_marks_match_edges_as_dashed():
     assert graph["edges"][0]["title"] == "confidence: 0.9"
 
 
+def test_fetch_hierarchy_neighborhood_uses_shadowdb_and_max_hops(fake_session):
+    fake_session.when("HAS_PARENT", [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}])
+
+    rows = graph_data.fetch_hierarchy_neighborhood(fake_session, "C001", max_hops=4)
+
+    assert rows == [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}]
+    query, params = fake_session.calls[0]
+    assert "USE meridianComposite.shadowDb" in query
+    assert "*1..4" in query
+    assert params["customerId"] == "C001"
+
+
+def test_fetch_hierarchy_edges_passes_id_list(fake_session):
+    fake_session.when("HAS_PARENT", [{"fromId": "C001", "toId": "C082"}])
+
+    rows = graph_data.fetch_hierarchy_edges(fake_session, {"C001", "C082"})
+
+    assert rows == [{"fromId": "C001", "toId": "C082"}]
+    _, params = fake_session.calls[0]
+    assert set(params["ids"]) == {"C001", "C082"}
+
+
+def test_build_match_delta_labels_customer_and_account_matches():
+    matches = [
+        {"meridian_id": "C001", "documents_id": "o1", "matchType": "name_fuzzy", "confidence": 1.0},
+        {"meridian_id": "A00001", "documents_id": "a1", "matchType": "account_exact", "confidence": 1.0},
+    ]
+    meridian_customer_by_id = {"C001": {"customerName": "Rosas Bakery"}}
+    meridian_account_by_id = {"A00001": {"accountId": "A00001"}}
+
+    delta = graph_data.build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id)
+
+    assert len(delta["nodes"]) == 2
+    assert len(delta["edges"]) == 2
+    labels = {n["id"]: n["label"] for n in delta["nodes"]}
+    assert labels["meridian:C001"] == "Customer: Rosas Bakery"
+    assert labels["meridian:A00001"] == "Account: A00001"
+    edge = next(e for e in delta["edges"] if e["from"] == "meridian:C001")
+    assert edge["to"] == "documents:o1"
+    assert edge["dashes"] is True
+
+
+def test_build_hierarchy_delta_flags_risk_customers():
+    hierarchy_rows = [
+        {"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"},
+        {"sourceId": "C002", "customerName": "Alvarez Distribution Co"},
+    ]
+    edge_rows = [{"fromId": "C001", "toId": "C082"}, {"fromId": "C002", "toId": "C083"}]
+
+    delta = graph_data.build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids={"C002"})
+
+    colors = {n["id"]: n["color"] for n in delta["nodes"]}
+    assert colors["meridian:C002"] == graph_data._RISK_COLOR
+    assert colors["meridian:C082"] == graph_data._GROUP_COLORS["meridian"]
+    assert len(delta["edges"]) == 2
+    assert delta["edges"][0]["label"] == "HAS_PARENT"
+
+
+def test_build_hierarchy_delta_with_no_risk_customers():
+    hierarchy_rows = [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}]
+
+    delta = graph_data.build_hierarchy_delta(hierarchy_rows, [])
+
+    assert delta["nodes"][0]["color"] == graph_data._GROUP_COLORS["meridian"]
+    assert delta["edges"] == []
+
+
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],

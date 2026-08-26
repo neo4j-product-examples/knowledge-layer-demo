@@ -4,33 +4,141 @@
   <meta charset="utf-8">
   <title>Entity Resolution — Meridian &amp; Documents</title>
   <style>
-    html, body { height: 100%; }
-    body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: #0b0c10; color: #eee; }
-    header { padding: 16px 24px; border-bottom: 1px solid #2a2c33; display: flex; align-items: center; gap: 16px; background: #14161c; }
-    header h1 { font-size: 18px; margin: 0; flex: 1; font-weight: 600; }
-    button { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; border-radius: 4px; background: #4C8BF5; color: white; }
-    button:hover { background: #3a76e0; }
-    #status { font-size: 13px; color: #aaa; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, sans-serif;
+      background: #ffffff;
+      color: #111;
+    }
     #error-banner { background: #fdecea; color: #9c1f18; padding: 10px 24px; display: none; }
-    #graph { width: 100%; height: calc(100vh - 92px); background: #0b0c10; }
+
+    /* ---------- Landing (clean, white) ---------- */
+    #landing {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      text-align: center;
+    }
+    #landing h1 { font-size: 22px; font-weight: 600; margin: 0; color: #111; }
+    #landing p { font-size: 14px; color: #666; margin: 0; max-width: 420px; }
+    #upload-btn {
+      padding: 12px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #4C8BF5;
+      color: white;
+    }
+    #upload-btn:hover { background: #3a76e0; }
+    #upload-btn:disabled { background: #a9c4ee; cursor: default; }
+
+    /* ---------- Workspace (chat left / graph right) ---------- */
+    #workspace {
+      display: none;
+      height: 100vh;
+      background: #0b0c10;
+      color: #eee;
+    }
+    body.workspace #landing { display: none; }
+    body.workspace #workspace { display: flex; }
+
+    #chat-pane {
+      width: 380px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: #14161c;
+      border-right: 1px solid #2a2c33;
+    }
+    #chat-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2c33;
+    }
+    #chat-header h2 { font-size: 15px; margin: 0; font-weight: 600; }
+    #chat-header p { font-size: 12px; color: #aaa; margin: 4px 0 0; }
+    #chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; }
+    .msg.user { align-self: flex-end; background: #4C8BF5; color: white; }
+    .msg.assistant { align-self: flex-start; background: #2a2c33; color: #eee; }
+    .msg.thinking { color: #999; font-style: italic; }
+    #chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 14px 16px;
+      border-top: 1px solid #2a2c33;
+    }
+    #chat-input {
+      flex: 1;
+      padding: 8px 10px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid #2a2c33;
+      background: #0b0c10;
+      color: #eee;
+    }
+    #chat-input:disabled { color: #666; }
+    #chat-send {
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #4C8BF5;
+      color: white;
+    }
+    #chat-send:hover { background: #3a76e0; }
+
+    #graph-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
     .legend { padding: 8px 24px; font-size: 12px; color: #aaa; background: #14161c; border-bottom: 1px solid #2a2c33; }
     .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 16px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #graph { flex: 1; background: #0b0c10; }
   </style>
 </head>
 <body>
   <div id="error-banner">{{ error or "" }}</div>
-  <header>
+
+  <div id="landing">
     <h1>Entity Resolution — Meridian ↔ Documents</h1>
-    <span id="status"></span>
-    <button id="upload-btn">Upload Document</button>
-  </header>
-  <div class="legend">
-    <span><span class="dot" style="background:#4C8BF5"></span>meridian</span>
-    <span><span class="dot" style="background:#F59E4C"></span>documents</span>
-    &nbsp;— rendered with Neo4j's own visualization library (NVL, the same engine behind Bloom).
+    <p>Upload a business plan to extract its entities and start resolving them against Meridian Bank's customer data.</p>
+    <button id="upload-btn">Upload Business Plan</button>
   </div>
-  <div id="graph"></div>
+
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="chat-header">
+        <h2>Entity Resolution Assistant</h2>
+        <p>Ask questions about the resolved graph</p>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Ask a question…" disabled>
+        <button id="chat-send">Send</button>
+      </div>
+    </div>
+    <div id="graph-pane">
+      <div class="legend">
+        <span><span class="dot" style="background:#4C8BF5"></span>meridian</span>
+        <span><span class="dot" style="background:#F59E4C"></span>documents</span>
+        <span><span class="dot" style="background:#E5484D"></span>risk flagged</span>
+      </div>
+      <div id="graph"></div>
+    </div>
+  </div>
 
   <script type="module">
     import { NVL } from 'https://esm.sh/@neo4j-nvl/base';
@@ -44,8 +152,15 @@
 
     let nvl = null;
     let interactions = [];
-    const container = document.getElementById('graph');
-    const statusEl = document.getElementById('status');
+    let relCounter = 0;
+    let matchedCustomerId = null;
+    let chatStep = 0; // 1 = ready to find customer, 2 = ready to find parent companies, 3 = done
+
+    const uploadBtn = document.getElementById('upload-btn');
+    const graphContainer = document.getElementById('graph');
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
 
     function attachInteractions(nvlInstance) {
       interactions.forEach(i => i.destroy?.());
@@ -64,8 +179,8 @@
         color: n.color,
         size: 20,
       }));
-      const relationships = data.edges.map((e, i) => ({
-        id: `rel-${i}`,
+      const relationships = data.edges.map(e => ({
+        id: `rel-${relCounter++}`,
         from: e.from,
         to: e.to,
         caption: e.label,
@@ -75,42 +190,143 @@
       return { nodes, relationships };
     }
 
-    async function loadGraph() {
-      statusEl.textContent = 'Loading graph…';
-      const res = await fetch('/api/graph');
-      const data = await res.json();
-      if (data.error) {
-        statusEl.textContent = data.error;
-        return;
-      }
-      const { nodes, relationships } = toNvlElements(data);
-      if (nvl) {
-        nvl.destroy();
-      }
-      nvl = new NVL(container, nodes, relationships, {
-        layout: 'forceDirected',
-        initialZoom: 1,
-        backgroundColor: '#0b0c10',
-      });
-      attachInteractions(nvl);
-      const matchCount = data.edges.filter(e => e.dashes).length;
-      const structuralCount = data.edges.length - matchCount;
-      statusEl.textContent = `${data.nodes.length} shadow nodes, ${structuralCount} structural edges, ${matchCount} SIMILAR_TO matches`;
+    function addMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
     }
 
-    document.getElementById('upload-btn').addEventListener('click', async () => {
-      statusEl.textContent = 'Processing document…';
-      const res = await fetch('/process', { method: 'POST' });
-      const data = await res.json();
-      if (data.error) {
-        statusEl.textContent = data.error;
-        return;
+    function addThinkingMessage() {
+      const div = addMessage('assistant', 'Thinking…');
+      div.classList.add('thinking');
+      return div;
+    }
+
+    function setPrefilled(text) {
+      chatInput.disabled = false;
+      chatInput.value = text;
+      chatInput.focus();
+    }
+
+    function disableChat(placeholder) {
+      chatInput.value = '';
+      chatInput.placeholder = placeholder;
+      chatInput.disabled = true;
+    }
+
+    uploadBtn.addEventListener('click', async () => {
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading…';
+      try {
+        const res = await fetch('/api/upload-business-plan', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          document.getElementById('error-banner').textContent = data.error;
+          document.getElementById('error-banner').style.display = 'block';
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Upload Business Plan';
+          return;
+        }
+
+        document.body.classList.add('workspace');
+        const { nodes, relationships } = toNvlElements(data.graph);
+        nvl = new NVL(graphContainer, nodes, relationships, {
+          layout: 'forceDirected',
+          initialZoom: 1,
+          backgroundColor: '#0b0c10',
+        });
+        attachInteractions(nvl);
+
+        const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
+        addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
+        chatStep = 1;
+        setPrefilled("Find the customer that matches Rosa's Bakery");
+      } catch (e) {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Upload Business Plan';
       }
-      statusEl.textContent = `Matched ${data.customerMatches} customers, ${data.accountMatches} accounts. Refreshing graph…`;
-      await loadGraph();
     });
 
-    loadGraph();
+    async function handleSend() {
+      const text = chatInput.value.trim();
+      if (!text || chatInput.disabled) return;
+      addMessage('user', text);
+      chatInput.value = '';
+      chatInput.disabled = true;
+
+      if (chatStep === 1) {
+        const thinking = addThinkingMessage();
+        try {
+          const res = await fetch('/api/find-customer', { method: 'POST' });
+          const data = await res.json();
+          thinking.remove();
+          if (data.error) {
+            addMessage('assistant', data.error);
+            chatInput.disabled = false;
+            return;
+          }
+          if (data.matches.length === 0) {
+            addMessage('assistant', "No match found for Rosa's Bakery in the banking data.");
+            chatInput.disabled = false;
+            return;
+          }
+          const summary = data.matches
+            .map(m => `${m.meridianName} (${Math.round(m.confidence * 100)}% confidence)`)
+            .join(', ');
+          addMessage('assistant', `Found a match: ${summary}.`);
+
+          const customerMatch = data.matches.find(m => m.kind === 'customer');
+          matchedCustomerId = customerMatch ? customerMatch.meridianId : null;
+
+          const { nodes, relationships } = toNvlElements(data.graph);
+          nvl.addAndUpdateElementsInGraph(nodes, relationships);
+
+          if (matchedCustomerId) {
+            chatStep = 2;
+            setPrefilled('Find parent companies');
+          } else {
+            disableChat('More questions coming soon');
+          }
+        } catch (e) {
+          thinking.remove();
+          addMessage('assistant', 'Something went wrong finding the customer.');
+          chatInput.disabled = false;
+        }
+      } else if (chatStep === 2) {
+        const thinking = addThinkingMessage();
+        try {
+          const res = await fetch('/api/find-parent-companies', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customerId: matchedCustomerId }),
+          });
+          const data = await res.json();
+          thinking.remove();
+          if (data.error) {
+            addMessage('assistant', data.error);
+            chatInput.disabled = false;
+            return;
+          }
+          addMessage('assistant', data.summary);
+          const { nodes, relationships } = toNvlElements(data.graph);
+          nvl.addAndUpdateElementsInGraph(nodes, relationships);
+          chatStep = 3;
+          disableChat('More questions coming soon');
+        } catch (e) {
+          thinking.remove();
+          addMessage('assistant', 'Something went wrong looking up parent companies.');
+          chatInput.disabled = false;
+        }
+      }
+    }
+
+    chatSend.addEventListener('click', handleSend);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleSend();
+    });
   </script>
 </body>
 </html>
