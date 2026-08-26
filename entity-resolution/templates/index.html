@@ -74,6 +74,15 @@
     .msg.user { align-self: flex-end; background: #4C8BF5; color: white; }
     .msg.assistant { align-self: flex-start; background: #2a2c33; color: #eee; }
     .msg.thinking { color: #999; font-style: italic; }
+    .suggestion {
+      align-self: flex-start;
+      font-size: 12px;
+      padding: 2px 4px;
+      cursor: pointer;
+    }
+    .suggestion:hover .suggestion-text { text-decoration: underline; }
+    .suggestion-label { color: #888; }
+    .suggestion-text { color: #9db4e8; font-weight: 600; }
     #chat-input-row {
       display: flex;
       gap: 8px;
@@ -205,10 +214,29 @@
       return div;
     }
 
-    function setPrefilled(text) {
+    function addSuggestion(text) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'suggestion';
+      const label = document.createElement('span');
+      label.className = 'suggestion-label';
+      label.textContent = 'Recommended follow up: ';
+      const value = document.createElement('span');
+      value.className = 'suggestion-text';
+      value.textContent = text;
+      wrapper.append(label, value);
+      wrapper.addEventListener('click', () => {
+        chatInput.value = text;
+        chatInput.focus();
+      });
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return wrapper;
+    }
+
+    function enableChat(placeholder = 'Ask a question…') {
+      chatInput.value = '';
+      chatInput.placeholder = placeholder;
       chatInput.disabled = false;
-      chatInput.value = text;
-      chatInput.focus();
     }
 
     function disableChat(placeholder) {
@@ -243,7 +271,8 @@
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
         chatStep = 1;
-        setPrefilled("Find the customer that matches Rosa's Bakery");
+        enableChat();
+        addSuggestion("Find the customer that matches Rosa's Bakery");
       } catch (e) {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Business Plan';
@@ -286,7 +315,8 @@
 
           if (matchedCustomerId) {
             chatStep = 2;
-            setPrefilled('Find parent companies');
+            enableChat();
+            addSuggestion('Find parent companies');
           } else {
             disableChat('More questions coming soon');
           }
