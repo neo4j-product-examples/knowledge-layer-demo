@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
-from resolver import db, graph_data, matching, shadow_nodes, wcc
+from resolver import db, graph_data, matching, shadow_nodes
 
 load_dotenv()
 
@@ -180,8 +180,6 @@ def find_parent_companies():
             }
 
             delta = graph_data.build_hierarchy_delta(hierarchy_rows, edge_rows, delinquent_ids)
-
-            wcc.run_wcc(session)
 
         name_by_id = {r["sourceId"]: r.get("customerName") or r["sourceId"] for r in hierarchy_rows}
         delinquent_facilities = [
