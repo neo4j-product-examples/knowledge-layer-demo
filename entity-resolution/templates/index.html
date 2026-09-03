@@ -198,14 +198,71 @@
       }
     }
 
+    // NVL's built-in 'forceDirected'/'d3Force' layouts never actually run in
+    // this build (isLayoutMoving() stays false and nodes sit wherever they're
+    // given, including all stacked at (0,0) if no x/y is provided) -- so we
+    // compute a simple force-directed layout ourselves and pass NVL the
+    // final positions, which it does render faithfully.
+    function layoutNodes(nodes, edges) {
+      const positions = new Map();
+      nodes.forEach((node, i) => {
+        const angle = (2 * Math.PI * i) / nodes.length;
+        positions.set(node.id, { x: 200 * Math.cos(angle), y: 200 * Math.sin(angle) });
+      });
+      const velocities = new Map(nodes.map(n => [n.id, { vx: 0, vy: 0 }]));
+
+      const REPULSION = 12000;
+      const SPRING_LENGTH = 150;
+      const SPRING_STRENGTH = 0.02;
+      const DAMPING = 0.85;
+
+      for (let iter = 0; iter < 300; iter++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const a = positions.get(nodes[i].id);
+            const b = positions.get(nodes[j].id);
+            const dx = a.x - b.x, dy = a.y - b.y;
+            const distSq = Math.max(dx * dx + dy * dy, 0.01);
+            const dist = Math.sqrt(distSq);
+            const force = REPULSION / distSq;
+            const fx = (dx / dist) * force, fy = (dy / dist) * force;
+            const va = velocities.get(nodes[i].id), vb = velocities.get(nodes[j].id);
+            va.vx += fx; va.vy += fy;
+            vb.vx -= fx; vb.vy -= fy;
+          }
+        }
+        for (const e of edges) {
+          const a = positions.get(e.from), b = positions.get(e.to);
+          if (!a || !b) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
+          const force = (dist - SPRING_LENGTH) * SPRING_STRENGTH;
+          const fx = (dx / dist) * force, fy = (dy / dist) * force;
+          const va = velocities.get(e.from), vb = velocities.get(e.to);
+          va.vx += fx; va.vy += fy;
+          vb.vx -= fx; vb.vy -= fy;
+        }
+        for (const node of nodes) {
+          const pos = positions.get(node.id);
+          const vel = velocities.get(node.id);
+          vel.vx *= DAMPING; vel.vy *= DAMPING;
+          pos.x += vel.vx * 0.05;
+          pos.y += vel.vy * 0.05;
+        }
+      }
+      return positions;
+    }
+
     function renderGraph() {
-      const nodes = Array.from(graphNodesById.values()).map(n => ({
-        id: n.id,
-        caption: n.label,
-        color: n.color,
-        size: 20,
-      }));
-      const relationships = Array.from(graphEdgesByKey.values()).map((e, i) => ({
+      const nodeList = Array.from(graphNodesById.values());
+      const edgeList = Array.from(graphEdgesByKey.values());
+      const positions = layoutNodes(nodeList, edgeList);
+
+      const nodes = nodeList.map(n => {
+        const pos = positions.get(n.id);
+        return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+      });
+      const relationships = edgeList.map((e, i) => ({
         id: `rel-${i}`,
         from: e.from,
         to: e.to,
@@ -216,11 +273,18 @@
 
       if (nvl) nvl.destroy();
       nvl = new NVL(graphContainer, nodes, relationships, {
-        layout: 'forceDirected',
         initialZoom: 1,
         backgroundColor: '#0b0c10',
       });
       attachInteractions(nvl);
+
+      // NVL's first paint doesn't reliably apply the x/y a node is
+      // constructed with -- nodes render stacked until something (e.g. a
+      // drag) forces a position update. setNodePositions is the same call
+      // a drag interaction uses internally, so calling it here with the
+      // very positions we just passed in forces that redraw immediately.
+      nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+      requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
     }
 
     function addMessage(role, text) {
