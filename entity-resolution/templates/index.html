@@ -161,7 +161,16 @@
 
     let nvl = null;
     let interactions = [];
-    let relCounter = 0;
+
+    // Accumulated app-shape graph state (not NVL shape). NVL's
+    // addAndUpdateElementsInGraph doesn't reliably apply a new node's custom
+    // color when nodes and edges are added together in the same call (its
+    // canvas doesn't repaint, or repaints without honoring the color) --
+    // rebuilding the whole NVL instance from the full accumulated graph each
+    // time is what reliably renders colors correctly, since that's exactly
+    // how the very first (upload) render already works.
+    const graphNodesById = new Map();
+    const graphEdgesByKey = new Map();
 
     const uploadBtn = document.getElementById('upload-btn');
     const graphContainer = document.getElementById('graph');
@@ -179,22 +188,39 @@
       ];
     }
 
-    function toNvlElements(data) {
-      const nodes = data.nodes.map(n => ({
+    function mergeGraphData(delta) {
+      if (!delta) return;
+      for (const node of delta.nodes || []) {
+        graphNodesById.set(node.id, node);
+      }
+      for (const edge of delta.edges || []) {
+        graphEdgesByKey.set(`${edge.from}->${edge.to}:${edge.label}`, edge);
+      }
+    }
+
+    function renderGraph() {
+      const nodes = Array.from(graphNodesById.values()).map(n => ({
         id: n.id,
         caption: n.label,
         color: n.color,
         size: 20,
       }));
-      const relationships = data.edges.map(e => ({
-        id: `rel-${relCounter++}`,
+      const relationships = Array.from(graphEdgesByKey.values()).map((e, i) => ({
+        id: `rel-${i}`,
         from: e.from,
         to: e.to,
         caption: e.label,
         color: '#666',
         width: 2,
       }));
-      return { nodes, relationships };
+
+      if (nvl) nvl.destroy();
+      nvl = new NVL(graphContainer, nodes, relationships, {
+        layout: 'forceDirected',
+        initialZoom: 1,
+        backgroundColor: '#0b0c10',
+      });
+      attachInteractions(nvl);
     }
 
     function addMessage(role, text) {
@@ -252,13 +278,8 @@
         }
 
         document.body.classList.add('workspace');
-        const { nodes, relationships } = toNvlElements(data.graph);
-        nvl = new NVL(graphContainer, nodes, relationships, {
-          layout: 'forceDirected',
-          initialZoom: 1,
-          backgroundColor: '#0b0c10',
-        });
-        attachInteractions(nvl);
+        mergeGraphData(data.graph);
+        renderGraph();
 
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
@@ -292,8 +313,8 @@
         }
         addMessage('assistant', data.reply || '(no response)');
         if (data.graph && data.graph.nodes && data.graph.nodes.length) {
-          const { nodes, relationships } = toNvlElements(data.graph);
-          nvl.addAndUpdateElementsInGraph(nodes, relationships);
+          mergeGraphData(data.graph);
+          renderGraph();
         }
       } catch (e) {
         thinking.remove();
