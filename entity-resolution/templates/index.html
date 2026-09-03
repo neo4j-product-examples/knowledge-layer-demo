@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Entity Resolution — Meridian &amp; Documents</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, sans-serif;
+      background: #ffffff;
+      color: #111;
+    }
+    #error-banner { background: #fdecea; color: #9c1f18; padding: 10px 24px; display: none; }
+
+    /* ---------- Landing (clean, white) ---------- */
+    #landing {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      text-align: center;
+    }
+    #landing h1 { font-size: 22px; font-weight: 600; margin: 0; color: #111; }
+    #landing p { font-size: 14px; color: #666; margin: 0; max-width: 420px; }
+    #upload-btn {
+      padding: 12px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #4C8BF5;
+      color: white;
+    }
+    #upload-btn:hover { background: #3a76e0; }
+    #upload-btn:disabled { background: #a9c4ee; cursor: default; }
+
+    /* ---------- Workspace (chat left / graph right) ---------- */
+    #workspace {
+      display: none;
+      height: 100vh;
+      background: #0b0c10;
+      color: #eee;
+    }
+    body.workspace #landing { display: none; }
+    body.workspace #workspace { display: flex; }
+
+    #chat-pane {
+      width: 380px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: #14161c;
+      border-right: 1px solid #2a2c33;
+    }
+    #chat-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #2a2c33;
+    }
+    #chat-header h2 { font-size: 15px; margin: 0; font-weight: 600; }
+    #chat-header p { font-size: 12px; color: #aaa; margin: 4px 0 0; }
+    #chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; }
+    .msg.user { align-self: flex-end; background: #4C8BF5; color: white; }
+    .msg.assistant { align-self: flex-start; background: #2a2c33; color: #eee; }
+    .msg.thinking { color: #999; font-style: italic; }
+    .suggestion {
+      align-self: flex-start;
+      font-size: 12px;
+      padding: 2px 4px;
+      cursor: pointer;
+    }
+    .suggestion:hover .suggestion-text { text-decoration: underline; }
+    .suggestion-label { color: #888; }
+    .suggestion-text { color: #9db4e8; font-weight: 600; }
+    #chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 14px 16px;
+      border-top: 1px solid #2a2c33;
+    }
+    #chat-input {
+      flex: 1;
+      padding: 8px 10px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid #2a2c33;
+      background: #0b0c10;
+      color: #eee;
+    }
+    #chat-input:disabled { color: #666; }
+    #chat-send {
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #4C8BF5;
+      color: white;
+    }
+    #chat-send:hover { background: #3a76e0; }
+
+    #graph-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .legend { padding: 12px 24px; font-size: 14px; color: #aaa; background: #14161c; border-top: 1px solid #2a2c33; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 20px; }
+    .dot { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
+    #graph { flex: 1; background: #0b0c10; }
+  </style>
+</head>
+<body>
+  <div id="error-banner">{{ error or "" }}</div>
+
+  <div id="landing">
+    <h1>Entity Resolution — Meridian ↔ Documents</h1>
+    <p>Upload a business plan to extract its entities and start resolving them against Meridian Bank's customer data.</p>
+    <button id="upload-btn">Upload Business Plan</button>
+  </div>
+
+  <div id="workspace">
+    <div id="chat-pane">
+      <div id="chat-header">
+        <h2>Entity Resolution Assistant</h2>
+        <p>Ask questions about the resolved graph</p>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Ask a question…" disabled>
+        <button id="chat-send">Send</button>
+      </div>
+    </div>
+    <div id="graph-pane">
+      <div id="graph"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#4C8BF5"></span>Banking Virtual Graph</span>
+        <span><span class="dot" style="background:#F59E4C"></span>Business Plan Knowledge Graph</span>
+        <span><span class="dot" style="background:#E5484D"></span>Risk Flagged</span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { NVL } from 'https://esm.sh/@neo4j-nvl/base';
+    import {
+      PanInteraction, ZoomInteraction, DragNodeInteraction, ClickInteraction,
+    } from 'https://esm.sh/@neo4j-nvl/interaction-handlers';
+
+    {% if error %}
+    document.getElementById('error-banner').style.display = 'block';
+    {% endif %}
+
+    let nvl = null;
+    let interactions = [];
+
+    // Accumulated app-shape graph state (not NVL shape). NVL's
+    // addAndUpdateElementsInGraph doesn't reliably apply a new node's custom
+    // color when nodes and edges are added together in the same call (its
+    // canvas doesn't repaint, or repaints without honoring the color) --
+    // rebuilding the whole NVL instance from the full accumulated graph each
+    // time is what reliably renders colors correctly, since that's exactly
+    // how the very first (upload) render already works.
+    const graphNodesById = new Map();
+    const graphEdgesByKey = new Map();
+
+    const uploadBtn = document.getElementById('upload-btn');
+    const graphContainer = document.getElementById('graph');
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+
+    function attachInteractions(nvlInstance) {
+      interactions.forEach(i => i.destroy?.());
+      interactions = [
+        new PanInteraction(nvlInstance),
+        new ZoomInteraction(nvlInstance),
+        new DragNodeInteraction(nvlInstance),
+        new ClickInteraction(nvlInstance),
+      ];
+    }
+
+    function mergeGraphData(delta) {
+      if (!delta) return;
+      for (const node of delta.nodes || []) {
+        graphNodesById.set(node.id, node);
+      }
+      for (const edge of delta.edges || []) {
+        graphEdgesByKey.set(`${edge.from}->${edge.to}:${edge.label}`, edge);
+      }
+    }
+
+    // NVL's built-in 'forceDirected'/'d3Force' layouts never actually run in
+    // this build (isLayoutMoving() stays false and nodes sit wherever they're
+    // given, including all stacked at (0,0) if no x/y is provided) -- so we
+    // compute a simple force-directed layout ourselves and pass NVL the
+    // final positions, which it does render faithfully.
+    function layoutNodes(nodes, edges) {
+      const positions = new Map();
+      nodes.forEach((node, i) => {
+        const angle = (2 * Math.PI * i) / nodes.length;
+        positions.set(node.id, { x: 200 * Math.cos(angle), y: 200 * Math.sin(angle) });
+      });
+      const velocities = new Map(nodes.map(n => [n.id, { vx: 0, vy: 0 }]));
+
+      const REPULSION = 12000;
+      const SPRING_LENGTH = 150;
+      const SPRING_STRENGTH = 0.02;
+      const DAMPING = 0.85;
+
+      for (let iter = 0; iter < 300; iter++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const a = positions.get(nodes[i].id);
+            const b = positions.get(nodes[j].id);
+            const dx = a.x - b.x, dy = a.y - b.y;
+            const distSq = Math.max(dx * dx + dy * dy, 0.01);
+            const dist = Math.sqrt(distSq);
+            const force = REPULSION / distSq;
+            const fx = (dx / dist) * force, fy = (dy / dist) * force;
+            const va = velocities.get(nodes[i].id), vb = velocities.get(nodes[j].id);
+            va.vx += fx; va.vy += fy;
+            vb.vx -= fx; vb.vy -= fy;
+          }
+        }
+        for (const e of edges) {
+          const a = positions.get(e.from), b = positions.get(e.to);
+          if (!a || !b) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
+          const force = (dist - SPRING_LENGTH) * SPRING_STRENGTH;
+          const fx = (dx / dist) * force, fy = (dy / dist) * force;
+          const va = velocities.get(e.from), vb = velocities.get(e.to);
+          va.vx += fx; va.vy += fy;
+          vb.vx -= fx; vb.vy -= fy;
+        }
+        for (const node of nodes) {
+          const pos = positions.get(node.id);
+          const vel = velocities.get(node.id);
+          vel.vx *= DAMPING; vel.vy *= DAMPING;
+          pos.x += vel.vx * 0.05;
+          pos.y += vel.vy * 0.05;
+        }
+      }
+      return positions;
+    }
+
+    function renderGraph() {
+      const nodeList = Array.from(graphNodesById.values());
+      const edgeList = Array.from(graphEdgesByKey.values());
+      const positions = layoutNodes(nodeList, edgeList);
+
+      const nodes = nodeList.map(n => {
+        const pos = positions.get(n.id);
+        return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+      });
+      const relationships = edgeList.map((e, i) => ({
+        id: `rel-${i}`,
+        from: e.from,
+        to: e.to,
+        caption: e.label,
+        color: '#666',
+        width: 2,
+      }));
+
+      if (nvl) nvl.destroy();
+      nvl = new NVL(graphContainer, nodes, relationships, {
+        initialZoom: 1,
+        backgroundColor: '#0b0c10',
+      });
+      attachInteractions(nvl);
+
+      // NVL's first paint doesn't reliably apply the x/y a node is
+      // constructed with -- nodes render stacked until something (e.g. a
+      // drag) forces a position update. setNodePositions is the same call
+      // a drag interaction uses internally, so calling it here with the
+      // very positions we just passed in forces that redraw immediately.
+      nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+      requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+    }
+
+    function addMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    }
+
+    function addThinkingMessage() {
+      const div = addMessage('assistant', 'Thinking…');
+      div.classList.add('thinking');
+      return div;
+    }
+
+    function addSuggestion(text) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'suggestion';
+      const label = document.createElement('span');
+      label.className = 'suggestion-label';
+      label.textContent = 'Recommended follow up: ';
+      const value = document.createElement('span');
+      value.className = 'suggestion-text';
+      value.textContent = text;
+      wrapper.append(label, value);
+      wrapper.addEventListener('click', () => {
+        chatInput.value = text;
+        chatInput.focus();
+      });
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return wrapper;
+    }
+
+    function enableChat(placeholder = 'Ask a question…') {
+      chatInput.value = '';
+      chatInput.placeholder = placeholder;
+      chatInput.disabled = false;
+    }
+
+    uploadBtn.addEventListener('click', async () => {
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading…';
+      try {
+        const res = await fetch('/api/upload-business-plan', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          document.getElementById('error-banner').textContent = data.error;
+          document.getElementById('error-banner').style.display = 'block';
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Upload Business Plan';
+          return;
+        }
+
+        document.body.classList.add('workspace');
+        mergeGraphData(data.graph);
+        renderGraph();
+
+        const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
+        addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
+        enableChat();
+        addSuggestion("Find the customer that matches Rosa's Bakery");
+      } catch (e) {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Upload Business Plan';
+      }
+    });
+
+    async function handleSend() {
+      const text = chatInput.value.trim();
+      if (!text || chatInput.disabled) return;
+      addMessage('user', text);
+      chatInput.value = '';
+      chatInput.disabled = true;
+
+      const thinking = addThinkingMessage();
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+        const data = await res.json();
+        thinking.remove();
+        if (data.error) {
+          addMessage('assistant', data.error);
+          return;
+        }
+        addMessage('assistant', data.reply || '(no response)');
+        if (data.graph && data.graph.nodes && data.graph.nodes.length) {
+          mergeGraphData(data.graph);
+          renderGraph();
+        }
+      } catch (e) {
+        thinking.remove();
+        addMessage('assistant', 'Something went wrong talking to the assistant.');
+      } finally {
+        chatInput.disabled = false;
+        chatInput.focus();
+      }
+    }
+
+    chatSend.addEventListener('click', handleSend);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleSend();
+    });
+  </script>
+</body>
+</html>

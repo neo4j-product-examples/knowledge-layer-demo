@@ -1,0 +1,9 @@
+product_type_code,product_type_name,category
+DEP-CHK,Business Checking,Deposit
+DEP-SAV,Business Savings,Deposit
+DEP-MMK,Money Market,Deposit
+LN-TERM,Term Loan,Loan
+LN-LOC,Line of Credit,Loan
+LN-CRE,Commercial Real Estate Loan,Loan
+LN-EQP,Equipment Loan,Loan
+LN-SBA,SBA Loan,Loan
