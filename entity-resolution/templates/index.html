@@ -74,6 +74,16 @@
     .msg.user { align-self: flex-end; background: #4C8BF5; color: white; }
     .msg.assistant { align-self: flex-start; background: #2a2c33; color: #eee; }
     .msg.thinking { color: #999; font-style: italic; }
+    .msg.assistant p { margin: 0 0 8px; }
+    .msg.assistant p:last-child { margin-bottom: 0; }
+    .msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
+    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { font-size: 13px; margin: 0 0 6px; }
+    .msg.assistant code { background: #14161c; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+    .msg.assistant pre { background: #14161c; padding: 8px; border-radius: 6px; overflow-x: auto; }
+    .msg.assistant pre code { background: none; padding: 0; }
+    .msg.assistant table { border-collapse: collapse; width: 100%; margin: 0 0 8px; font-size: 12px; }
+    .msg.assistant th, .msg.assistant td { border: 1px solid #3a3c45; padding: 4px 6px; text-align: left; }
+    .msg.assistant a { color: #9db4e8; }
     .suggestion {
       align-self: flex-start;
       font-size: 12px;
@@ -154,6 +164,8 @@
     import {
       PanInteraction, ZoomInteraction, DragNodeInteraction, ClickInteraction,
     } from 'https://esm.sh/@neo4j-nvl/interaction-handlers';
+    import { marked } from 'https://esm.sh/marked@13';
+    import DOMPurify from 'https://esm.sh/dompurify@3';
 
     {% if error %}
     document.getElementById('error-banner').style.display = 'block';
@@ -255,7 +267,12 @@
 
     function renderGraph() {
       const nodeList = Array.from(graphNodesById.values());
-      const edgeList = Array.from(graphEdgesByKey.values());
+      const nodeIds = new Set(nodeList.map(n => n.id));
+      // A tool's delta can reveal a node's sub-entities (e.g. a customer's
+      // KYC/credit score) before the customer itself is on the canvas --
+      // NVL throws on a relationship whose endpoint isn't a known node id,
+      // so drop any edge that would dangle instead of crashing the render.
+      const edgeList = Array.from(graphEdgesByKey.values()).filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
       const positions = layoutNodes(nodeList, edgeList);
 
       const nodes = nodeList.map(n => {
@@ -290,7 +307,14 @@
     function addMessage(role, text) {
       const div = document.createElement('div');
       div.className = `msg ${role}`;
-      div.textContent = text;
+      if (role === 'assistant') {
+        // The model's replies are written as markdown (headings, bold,
+        // tables, lists) -- render it instead of showing the raw syntax.
+        // User text stays plain (textContent) so it's never parsed as HTML.
+        div.innerHTML = DOMPurify.sanitize(marked.parse(text));
+      } else {
+        div.textContent = text;
+      }
       chatMessages.appendChild(div);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return div;
