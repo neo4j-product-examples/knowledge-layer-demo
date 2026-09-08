@@ -15,7 +15,12 @@ didn't return. Be concise in your final answers.
 
 If a request needs a Meridian customerId you don't already know (from an earlier tool
 result in this conversation), call find_customer first to resolve one from the business
-plan's entities before calling any tool that requires a customer_id."""
+plan's entities before calling any tool that requires a customer_id.
+
+For loan-decision questions ("should we approve this loan", "what's their credit
+picture look like"), pull together get_customer_risk_profile, get_customer_credit_score,
+get_customer_transaction_summary, and get_customer_loan_applications rather than
+answering from just one of them."""
 
 TOOLS = [
     {
@@ -51,6 +56,51 @@ TOOLS = [
             "Given a Meridian customerId, returns its KYC status/risk rating and any "
             "loan facilities with their payment status. Use this to answer direct "
             "questions about one customer's risk profile."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+            },
+            "required": ["customer_id"],
+        },
+    },
+    {
+        "name": "get_customer_credit_score",
+        "description": (
+            "Given a Meridian customerId, returns its most recent credit score/band "
+            "plus its score history over time. Use this for loan-decision questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+            },
+            "required": ["customer_id"],
+        },
+    },
+    {
+        "name": "get_customer_loan_applications",
+        "description": (
+            "Given a Meridian customerId, returns its loan applications (purpose, "
+            "requested amount, term, rate type, and status such as Under Review/"
+            "Approved/Declined/Funded/Withdrawn). Use this for loan-decision questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+            },
+            "required": ["customer_id"],
+        },
+    },
+    {
+        "name": "get_customer_transaction_summary",
+        "description": (
+            "Given a Meridian customerId, summarizes transaction activity across all "
+            "of its accounts: transaction count, total inflow/outflow, net cash flow, "
+            "a breakdown by transaction type, and the covered date range. Use this to "
+            "gauge cash-flow health for loan-decision questions."
         ),
         "input_schema": {
             "type": "object",
@@ -141,7 +191,57 @@ def run_get_customer_risk_profile(session, customer_id):
     facility_rows = matching.fetch_meridian_customer_facilities(session)
     kyc = next((k for k in kyc_rows if k["customerId"] == customer_id), None)
     facilities = [f for f in facility_rows if f["customerId"] == customer_id]
-    return {"customerId": customer_id, "kyc": kyc, "facilities": facilities}
+    graph = graph_data.build_risk_profile_delta(customer_id, kyc, facilities)
+    return {"customerId": customer_id, "kyc": kyc, "facilities": facilities, "graph": graph}
+
+
+def run_get_customer_credit_score(session, customer_id):
+    scores = matching.fetch_meridian_customer_credit_scores(session)
+    customer_scores = [s for s in scores if s["customerId"] == customer_id]
+    customer_scores.sort(key=lambda s: s["scoreDate"])
+    # scoreDate comes back as a neo4j.time.Date object (not JSON-serializable).
+    customer_scores = [{**s, "scoreDate": str(s["scoreDate"])} for s in customer_scores]
+    latest = customer_scores[-1] if customer_scores else None
+    graph = graph_data.build_credit_score_delta(customer_id, latest)
+    return {"customerId": customer_id, "latestScore": latest, "scoreHistory": customer_scores, "graph": graph}
+
+
+def run_get_customer_loan_applications(session, customer_id):
+    applications = matching.fetch_meridian_customer_loan_applications(session)
+    customer_applications = [
+        {**a, "applicationDate": str(a["applicationDate"])}
+        for a in applications
+        if a["customerId"] == customer_id
+    ]
+    graph = graph_data.build_loan_application_delta(customer_id, customer_applications)
+    return {"customerId": customer_id, "applications": customer_applications, "graph": graph}
+
+
+def run_get_customer_transaction_summary(session, customer_id):
+    transactions = matching.fetch_meridian_customer_transactions(session)
+    customer_transactions = [t for t in transactions if t["customerId"] == customer_id]
+
+    inflow = sum(t["amount"] for t in customer_transactions if t["amount"] and t["amount"] > 0)
+    outflow = sum(-t["amount"] for t in customer_transactions if t["amount"] and t["amount"] < 0)
+
+    by_type = {}
+    for t in customer_transactions:
+        by_type[t["transactionType"]] = by_type.get(t["transactionType"], 0) + 1
+
+    dates = [t["transactionDate"] for t in customer_transactions if t.get("transactionDate")]
+
+    summary = {
+        "customerId": customer_id,
+        "transactionCount": len(customer_transactions),
+        "totalInflow": round(inflow, 2),
+        "totalOutflow": round(outflow, 2),
+        "netCashFlow": round(inflow - outflow, 2),
+        "transactionTypeBreakdown": by_type,
+        "earliestDate": str(min(dates)) if dates else None,
+        "latestDate": str(max(dates)) if dates else None,
+    }
+    summary["graph"] = graph_data.build_transaction_summary_delta(customer_id, summary)
+    return summary
 
 
 def run_tool(name, tool_input, session):
@@ -151,6 +251,12 @@ def run_tool(name, tool_input, session):
         return run_find_parent_companies(session, tool_input["customer_id"])
     if name == "get_customer_risk_profile":
         return run_get_customer_risk_profile(session, tool_input["customer_id"])
+    if name == "get_customer_credit_score":
+        return run_get_customer_credit_score(session, tool_input["customer_id"])
+    if name == "get_customer_loan_applications":
+        return run_get_customer_loan_applications(session, tool_input["customer_id"])
+    if name == "get_customer_transaction_summary":
+        return run_get_customer_transaction_summary(session, tool_input["customer_id"])
     return {"error": f"Unknown tool: {name}"}
 
 

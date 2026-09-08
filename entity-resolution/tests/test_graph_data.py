@@ -138,6 +138,90 @@ def test_build_hierarchy_delta_with_no_risk_customers():
     assert delta["edges"] == []
 
 
+def test_build_risk_profile_delta_flags_delinquent_facility():
+    kyc = {"customerId": "C001", "riskRating": "Low", "notes": "No flags"}
+    facilities = [
+        {"customerId": "C001", "facilityId": "TL-1001", "paymentStatus": "Current", "daysPastDue": 0},
+        {"customerId": "C001", "facilityId": "LOC-2002", "paymentStatus": "Delinquent", "daysPastDue": 62},
+    ]
+
+    delta = graph_data.build_risk_profile_delta("C001", kyc, facilities)
+
+    colors = {n["id"]: n["color"] for n in delta["nodes"]}
+    assert colors["meridian:KYC-C001"] == graph_data._GROUP_COLORS["meridian"]
+    assert colors["meridian:TL-1001"] == graph_data._GROUP_COLORS["meridian"]
+    assert colors["meridian:LOC-2002"] == graph_data._RISK_COLOR
+    assert {e["to"] for e in delta["edges"]} == {"meridian:KYC-C001", "meridian:TL-1001", "meridian:LOC-2002"}
+
+
+def test_build_risk_profile_delta_handles_no_kyc_or_facilities():
+    delta = graph_data.build_risk_profile_delta("C999", None, [])
+
+    assert delta == {"nodes": [], "edges": []}
+
+
+def test_build_credit_score_delta_labels_score_and_band():
+    latest_score = {"scoreId": "CS0000010", "creditScore": 721, "scoreBand": "Good"}
+
+    delta = graph_data.build_credit_score_delta("C001", latest_score)
+
+    assert delta["nodes"] == [{
+        "id": "meridian:CS0000010", "label": "Credit Score: 721 (Good)",
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+    }]
+    assert delta["edges"] == [{
+        "from": "meridian:C001", "to": "meridian:CS0000010",
+        "label": "HAS_CREDIT_SCORE", "title": "HAS_CREDIT_SCORE", "dashes": False,
+    }]
+
+
+def test_build_credit_score_delta_handles_no_score():
+    delta = graph_data.build_credit_score_delta("C999", None)
+
+    assert delta == {"nodes": [], "edges": []}
+
+
+def test_build_loan_application_delta_creates_node_and_edge_per_application():
+    applications = [
+        {"applicationId": "APP-3001", "status": "Under Review"},
+        {"applicationId": "APP-3002", "status": "Approved"},
+    ]
+
+    delta = graph_data.build_loan_application_delta("C001", applications)
+
+    assert len(delta["nodes"]) == 2
+    assert len(delta["edges"]) == 2
+    assert delta["nodes"][0]["label"] == "Loan Application: APP-3001 (Under Review)"
+    assert delta["edges"][0] == {
+        "from": "meridian:C001", "to": "meridian:APP-3001",
+        "label": "APPLIED_FOR", "title": "APPLIED_FOR", "dashes": False,
+    }
+
+
+def test_build_transaction_summary_delta_flags_negative_cash_flow():
+    summary = {"transactionCount": 48, "netCashFlow": -83131.13}
+
+    delta = graph_data.build_transaction_summary_delta("C002", summary)
+
+    assert delta["nodes"][0]["color"] == graph_data._RISK_COLOR
+    assert "48" in delta["nodes"][0]["label"]
+    assert delta["edges"][0]["from"] == "meridian:C002"
+
+
+def test_build_transaction_summary_delta_positive_cash_flow_is_not_flagged():
+    summary = {"transactionCount": 120, "netCashFlow": 127506.52}
+
+    delta = graph_data.build_transaction_summary_delta("C001", summary)
+
+    assert delta["nodes"][0]["color"] == graph_data._GROUP_COLORS["meridian"]
+
+
+def test_build_transaction_summary_delta_handles_no_transactions():
+    delta = graph_data.build_transaction_summary_delta("C999", {"transactionCount": 0, "netCashFlow": 0})
+
+    assert delta == {"nodes": [], "edges": []}
+
+
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],

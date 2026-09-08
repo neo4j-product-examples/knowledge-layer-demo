@@ -304,6 +304,51 @@ def fetch_meridian_customer_kyc(session):
     return [dict(r) for r in result]
 
 
+def fetch_meridian_customer_credit_scores(session):
+    """Customer-[:HAS_CREDIT_SCORE]->CreditScore rows (a customer has a
+    history of scores over time) -- used for loan-decision questions."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:HAS_CREDIT_SCORE]->(s:CreditScore)
+        RETURN c.customerId AS customerId, s.scoreId AS scoreId, s.creditScore AS creditScore,
+               s.scoreBand AS scoreBand, s.scoreDate AS scoreDate
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_customer_loan_applications(session):
+    """Customer-[:APPLIED_FOR]->LoanApplication rows -- pending/past loan
+    requests, for loan-decision questions."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:APPLIED_FOR]->(l:LoanApplication)
+        RETURN c.customerId AS customerId, l.applicationId AS applicationId,
+               l.status AS status, l.purpose AS purpose,
+               l.requestedAmount AS requestedAmount, l.requestedRateType AS requestedRateType,
+               l.termYears AS termYears, l.applicationDate AS applicationDate
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_customer_transactions(session):
+    """Customer-[:OWNS_ACCOUNT]->Account-[:HAS_TRANSACTION]->Transaction rows,
+    for summarizing cash-flow behavior on loan-decision questions."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:OWNS_ACCOUNT]->(a:Account)-[:HAS_TRANSACTION]->(t:Transaction)
+        RETURN c.customerId AS customerId, t.transactionId AS transactionId,
+               t.transactionType AS transactionType, t.amount AS amount,
+               t.transactionDate AS transactionDate
+        """
+    )
+    return [dict(r) for r in result]
+
+
 def fetch_document_ownership(session):
     """Person-[:OWNS {pct, role}]->Organization pairs (e.g. Rosa/Marcus
     Alvarez owning Rosa's Bakery) — mirrors fetch_meridian_account_ownership

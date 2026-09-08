@@ -204,6 +204,52 @@ def test_fetch_meridian_customer_kyc_uses_meridian_constituent(fake_session):
     assert "USE meridianComposite.meridian" in query
 
 
+def test_fetch_meridian_customer_credit_scores_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "HAS_CREDIT_SCORE",
+        [{"customerId": "C001", "creditScore": 705, "scoreBand": "Good", "scoreDate": "2024-06-01"}],
+    )
+
+    rows = matching.fetch_meridian_customer_credit_scores(fake_session)
+
+    assert rows == [{"customerId": "C001", "creditScore": 705, "scoreBand": "Good", "scoreDate": "2024-06-01"}]
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_customer_loan_applications_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "APPLIED_FOR",
+        [{
+            "customerId": "C001", "applicationId": "APP-3001", "status": "Under Review",
+            "purpose": "Equipment purchase", "requestedAmount": 400000, "requestedRateType": "Fixed",
+            "termYears": 10, "applicationDate": "2024-01-01",
+        }],
+    )
+
+    rows = matching.fetch_meridian_customer_loan_applications(fake_session)
+
+    assert rows[0]["applicationId"] == "APP-3001"
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_customer_transactions_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "HAS_TRANSACTION",
+        [{
+            "customerId": "C001", "transactionId": "T001", "transactionType": "Deposit",
+            "amount": 100.0, "transactionDate": "2024-01-01",
+        }],
+    )
+
+    rows = matching.fetch_meridian_customer_transactions(fake_session)
+
+    assert rows[0]["transactionId"] == "T001"
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
 def test_fetch_document_ownership_uses_documents_constituent(fake_session):
     fake_session.when(
         "MATCH (p:Person)-[r:OWNS]->(o:Organization)",
