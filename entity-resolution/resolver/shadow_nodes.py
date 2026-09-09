@@ -33,6 +33,31 @@ SET r += $properties
 RETURN r
 """
 
+_MERGE_SHADOW_NODES_BATCH = """
+USE meridianComposite.shadowDb
+UNWIND $rows AS row
+MERGE (n:Shadow:{label} {{sourceGraph: $sourceGraph, sourceId: row.sourceId}})
+SET n += row.properties
+"""
+
+_MERGE_SHADOW_RELATIONSHIPS_BATCH = """
+USE meridianComposite.shadowDb
+UNWIND $rows AS row
+MATCH (a:Shadow {{sourceGraph: row.fromSourceGraph, sourceId: row.fromSourceId}})
+MATCH (b:Shadow {{sourceGraph: row.toSourceGraph, sourceId: row.toSourceId}})
+MERGE (a)-[r:{rel_type}]->(b)
+SET r += row.properties
+"""
+
+_MERGE_SIMILAR_TO_BATCH = """
+USE meridianComposite.shadowDb
+UNWIND $rows AS row
+MATCH (m:Shadow {sourceGraph: 'meridian', sourceId: row.meridianId})
+MATCH (d:Shadow {sourceGraph: 'documents', sourceId: row.documentsId})
+MERGE (m)-[r:SIMILAR_TO]-(d)
+SET r.matchType = row.matchType, r.confidence = row.confidence, r.matchedOn = row.matchedOn
+"""
+
 _COUNT_MERIDIAN_SHADOW_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow {sourceGraph: 'meridian'})
@@ -70,35 +95,36 @@ def _merge_shadow_node(session, label, source_graph, source_id, properties):
     )
 
 
+def _merge_shadow_nodes_batch(session, label, source_graph, rows):
+    """rows: [{'sourceId': ..., 'properties': {...}}, ...]. One round trip
+    for the whole batch instead of one per row -- with the composite
+    database two network hops away, a per-row loop over dozens/hundreds of
+    rows is the difference between a fast page load and a 20+ second one."""
+    if not rows:
+        return
+    query = _MERGE_SHADOW_NODES_BATCH.format(label=label)
+    session.run(query, sourceGraph=source_graph, rows=rows)
+
+
 def seed_meridian_customers(session, customers):
-    for c in customers:
-        source_id = c.get("customerId")
-        if source_id is None:
-            continue
-        _merge_shadow_node(
-            session,
-            label="Customer",
-            source_graph="meridian",
-            source_id=source_id,
-            properties={
-                "customerName": c.get("customerName"),
-                "customerType": c.get("customerType"),
-            },
-        )
+    rows = [
+        {
+            "sourceId": c["customerId"],
+            "properties": {"customerName": c.get("customerName"), "customerType": c.get("customerType")},
+        }
+        for c in customers
+        if c.get("customerId") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Customer", "meridian", rows)
 
 
 def seed_meridian_accounts(session, accounts):
-    for a in accounts:
-        source_id = a.get("accountId")
-        if source_id is None:
-            continue
-        _merge_shadow_node(
-            session,
-            label="Account",
-            source_graph="meridian",
-            source_id=source_id,
-            properties={},
-        )
+    rows = [
+        {"sourceId": a["accountId"], "properties": {}}
+        for a in accounts
+        if a.get("accountId") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Account", "meridian", rows)
 
 
 def seed_meridian_shadow_nodes(session, customers, accounts):
@@ -123,27 +149,45 @@ def create_shadow_relationship(
     )
 
 
+def create_shadow_relationships_batch(session, rel_type, rows):
+    """rows: [{'fromSourceGraph', 'fromSourceId', 'toSourceGraph', 'toSourceId',
+    'properties'}, ...]. One round trip for the whole batch (see
+    _merge_shadow_nodes_batch for why that matters)."""
+    if not rows:
+        return
+    query = _MERGE_SHADOW_RELATIONSHIPS_BATCH.format(rel_type=rel_type)
+    session.run(query, rows=rows)
+
+
 def seed_meridian_account_ownership(session, ownership_edges):
     """Shadows Customer-[:OWNS_ACCOUNT]->Account edges from the meridian
     graph between the already-shadowed Customer/Account shadow nodes."""
-    for edge in ownership_edges:
-        customer_id = edge.get("customerId")
-        account_id = edge.get("accountId")
-        if customer_id is None or account_id is None:
-            continue
-        create_shadow_relationship(session, "OWNS_ACCOUNT", "meridian", customer_id, "meridian", account_id)
+    rows = [
+        {
+            "fromSourceGraph": "meridian", "fromSourceId": e["customerId"],
+            "toSourceGraph": "meridian", "toSourceId": e["accountId"],
+            "properties": {},
+        }
+        for e in ownership_edges
+        if e.get("customerId") is not None and e.get("accountId") is not None
+    ]
+    create_shadow_relationships_batch(session, "OWNS_ACCOUNT", rows)
 
 
 def seed_meridian_customer_hierarchy(session, hierarchy_edges):
     """Shadows Customer-[:HAS_PARENT]->Customer edges (corporate ownership
     hierarchy) so WCC can surface customers connected only through a shared
     ultimate parent several hops up, which a shallow join would miss."""
-    for edge in hierarchy_edges:
-        customer_id = edge.get("customerId")
-        parent_customer_id = edge.get("parentCustomerId")
-        if customer_id is None or parent_customer_id is None:
-            continue
-        create_shadow_relationship(session, "HAS_PARENT", "meridian", customer_id, "meridian", parent_customer_id)
+    rows = [
+        {
+            "fromSourceGraph": "meridian", "fromSourceId": e["customerId"],
+            "toSourceGraph": "meridian", "toSourceId": e["parentCustomerId"],
+            "properties": {},
+        }
+        for e in hierarchy_edges
+        if e.get("customerId") is not None and e.get("parentCustomerId") is not None
+    ]
+    create_shadow_relationships_batch(session, "HAS_PARENT", rows)
 
 
 def create_document_shadow_node(session, label, source_id, properties):
@@ -159,60 +203,73 @@ def create_document_shadow_node(session, label, source_id, properties):
 def seed_document_shadow_nodes(session, persons, organizations, accounts, properties):
     """Shadows every Person/Organization/Account/Property node from the
     documents graph, run when a document is uploaded (not on startup)."""
-    for p in persons:
-        source_id = p.get("__id__")
-        if source_id is None:
-            continue
-        create_document_shadow_node(session, "Person", source_id, {
-            "customerID": p.get("customerID"),
-            "name": p.get("name"),
-        })
-    for o in organizations:
-        source_id = o.get("__id__")
-        if source_id is None:
-            continue
-        create_document_shadow_node(session, "Organization", source_id, {"name": o.get("name")})
-    for a in accounts:
-        source_id = a.get("__id__")
-        if source_id is None:
-            continue
-        create_document_shadow_node(session, "Account", source_id, {
-            "accountID": a.get("accountID"),
-            "accountNumber": a.get("accountNumber"),
-        })
-    for pr in properties:
-        source_id = pr.get("__id__")
-        if source_id is None:
-            continue
-        create_document_shadow_node(session, "Property", source_id, {"name": pr.get("name")})
+    person_rows = [
+        {"sourceId": p["__id__"], "properties": {"customerID": p.get("customerID"), "name": p.get("name")}}
+        for p in persons if p.get("__id__") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Person", "documents", person_rows)
+
+    org_rows = [
+        {"sourceId": o["__id__"], "properties": {"name": o.get("name")}}
+        for o in organizations if o.get("__id__") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Organization", "documents", org_rows)
+
+    account_rows = [
+        {"sourceId": a["__id__"], "properties": {"accountID": a.get("accountID"), "accountNumber": a.get("accountNumber")}}
+        for a in accounts if a.get("__id__") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Account", "documents", account_rows)
+
+    property_rows = [
+        {"sourceId": pr["__id__"], "properties": {"name": pr.get("name")}}
+        for pr in properties if pr.get("__id__") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "Property", "documents", property_rows)
 
 
 def seed_document_relationships(session, worked_at_edges, authorized_for_edges, co_owns_edges, ownership_edges=None):
     """Shadows the documents graph's own Person->Organization/Account/Property
     relationships between the already-shadowed documents nodes."""
-    for edge in worked_at_edges:
-        person_id, org_id = edge.get("personId"), edge.get("organizationId")
-        if person_id is None or org_id is None:
-            continue
-        create_shadow_relationship(session, "WORKED_AT", "documents", person_id, "documents", org_id)
-    for edge in authorized_for_edges:
-        person_id, account_id = edge.get("personId"), edge.get("accountId")
-        if person_id is None or account_id is None:
-            continue
-        create_shadow_relationship(session, "AUTHORIZED_FOR", "documents", person_id, "documents", account_id)
-    for edge in co_owns_edges:
-        person_id, property_id = edge.get("personId"), edge.get("propertyId")
-        if person_id is None or property_id is None:
-            continue
-        create_shadow_relationship(session, "CO_OWNS", "documents", person_id, "documents", property_id)
-    for edge in (ownership_edges or []):
-        person_id, org_id = edge.get("personId"), edge.get("organizationId")
-        if person_id is None or org_id is None:
-            continue
-        create_shadow_relationship(
-            session, "OWNS", "documents", person_id, "documents", org_id,
-            properties={"pct": edge.get("pct"), "role": edge.get("role")},
-        )
+    worked_at_rows = [
+        {
+            "fromSourceGraph": "documents", "fromSourceId": e["personId"],
+            "toSourceGraph": "documents", "toSourceId": e["organizationId"],
+            "properties": {},
+        }
+        for e in worked_at_edges if e.get("personId") is not None and e.get("organizationId") is not None
+    ]
+    create_shadow_relationships_batch(session, "WORKED_AT", worked_at_rows)
+
+    authorized_for_rows = [
+        {
+            "fromSourceGraph": "documents", "fromSourceId": e["personId"],
+            "toSourceGraph": "documents", "toSourceId": e["accountId"],
+            "properties": {},
+        }
+        for e in authorized_for_edges if e.get("personId") is not None and e.get("accountId") is not None
+    ]
+    create_shadow_relationships_batch(session, "AUTHORIZED_FOR", authorized_for_rows)
+
+    co_owns_rows = [
+        {
+            "fromSourceGraph": "documents", "fromSourceId": e["personId"],
+            "toSourceGraph": "documents", "toSourceId": e["propertyId"],
+            "properties": {},
+        }
+        for e in co_owns_edges if e.get("personId") is not None and e.get("propertyId") is not None
+    ]
+    create_shadow_relationships_batch(session, "CO_OWNS", co_owns_rows)
+
+    ownership_rows = [
+        {
+            "fromSourceGraph": "documents", "fromSourceId": e["personId"],
+            "toSourceGraph": "documents", "toSourceId": e["organizationId"],
+            "properties": {"pct": e.get("pct"), "role": e.get("role")},
+        }
+        for e in (ownership_edges or []) if e.get("personId") is not None and e.get("organizationId") is not None
+    ]
+    create_shadow_relationships_batch(session, "OWNS", ownership_rows)
 
 
 def create_similar_to(session, match):
@@ -228,14 +285,30 @@ def create_similar_to(session, match):
     )
 
 
+def create_similar_to_batch(session, matches):
+    """One round trip for the whole batch (see _merge_shadow_nodes_batch for
+    why that matters)."""
+    if not matches:
+        return
+    rows = [
+        {
+            "meridianId": m["meridian_id"], "documentsId": m["documents_id"],
+            "matchType": m["matchType"], "confidence": m["confidence"], "matchedOn": m["matchedOn"],
+        }
+        for m in matches
+    ]
+    session.run(_MERGE_SIMILAR_TO_BATCH, rows=rows)
+
+
 def apply_document_matches(session, matches, documents_label, documents_lookup):
-    """For each match, create the documents-side shadow node (looked up via
+    """Creates the documents-side shadow node for each match (looked up via
     documents_lookup, keyed by documents_id) and the SIMILAR_TO edge.
 
     documents_lookup: dict mapping documents_id -> raw property dict.
     """
-    for match in matches:
-        doc_id = match["documents_id"]
-        properties = documents_lookup.get(doc_id, {})
-        create_document_shadow_node(session, documents_label, doc_id, properties)
-        create_similar_to(session, match)
+    node_rows = [
+        {"sourceId": m["documents_id"], "properties": documents_lookup.get(m["documents_id"], {})}
+        for m in matches
+    ]
+    _merge_shadow_nodes_batch(session, documents_label, "documents", node_rows)
+    create_similar_to_batch(session, matches)
