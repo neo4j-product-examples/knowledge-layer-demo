@@ -189,7 +189,7 @@ def chat():
     the UI hardcoding two fixed steps.
 
     Streams as Server-Sent Events so each tool result reaches the client
-    the instant it actually completes -- the graph/decision-trace update in
+    the instant it actually completes -- the graph/tool-call-trace update in
     real time during the ~10-15s of tool calls, instead of the whole
     request finishing (tool calls AND the final answer, ~30-45s total)
     before anything is sent and the client faking a replay of steps that
@@ -232,7 +232,7 @@ def chat():
                             )
                             final_text = (
                                 "The assistant finished its analysis but didn't return a written "
-                                "summary this time -- the decision trace above shows every step it "
+                                "summary this time -- the tool call trace above shows every step it "
                                 "completed. Try asking again."
                             )
                         yield _sse_event({

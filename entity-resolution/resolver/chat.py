@@ -273,7 +273,7 @@ TOOL_STEP_LABELS = {
 
 def describe_tool_call(name, tool_input):
     """Human-readable label for one tool call, used both for the live
-    "thinking" status and for its entry in the decision trace -- this is
+    "thinking" status and for its entry in the tool call trace -- this is
     the traceability layer: every step the agent took, in plain language."""
     label = TOOL_STEP_LABELS.get(name, f"Running {name}")
     tool_input = tool_input or {}

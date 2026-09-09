@@ -74,7 +74,7 @@
     #upload-btn:hover { background: var(--brand-navy-dark); }
     #upload-btn:disabled { background: #b9c9d2; cursor: default; }
 
-    /* ---------- Workspace (topbar / chat+graph row / decision trace) ---------- */
+    /* ---------- Workspace (topbar / chat+graph row / tool call trace) ---------- */
     #workspace {
       display: none;
       height: 100vh;
@@ -215,8 +215,8 @@
     .dot { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
     #graph { flex: 1; background: var(--panel); }
 
-    /* ---------- Decision Trace (audit log, pinned to the bottom) ---------- */
-    #decision-trace {
+    /* ---------- Tool Call Trace (audit log, pinned to the bottom) ---------- */
+    #tool-call-trace {
       flex-shrink: 0;
       height: 150px;
       background: var(--panel);
@@ -226,7 +226,7 @@
       flex-direction: column;
       overflow: hidden;
     }
-    #decision-trace-header {
+    #tool-call-trace-header {
       padding: 10px 24px 4px;
       font-size: 11px;
       font-weight: 700;
@@ -235,8 +235,8 @@
       color: var(--muted);
       flex-shrink: 0;
     }
-    #decision-trace-empty { padding: 0 24px; font-size: 12px; color: var(--muted); }
-    #decision-trace-entries {
+    #tool-call-trace-empty { padding: 0 24px; font-size: 12px; color: var(--muted); }
+    #tool-call-trace-entries {
       flex: 1;
       display: flex;
       align-items: stretch;
@@ -314,10 +314,10 @@
       </div>
     </div>
     <div id="trace-resize-handle" class="resize-handle-y"></div>
-    <div id="decision-trace">
-      <div id="decision-trace-header">Decision Trace</div>
-      <div id="decision-trace-empty">Every step the assistant takes will be logged here for audit.</div>
-      <div id="decision-trace-entries"></div>
+    <div id="tool-call-trace">
+      <div id="tool-call-trace-header">Tool Call Trace</div>
+      <div id="tool-call-trace-empty">Every step the assistant takes will be logged here for audit.</div>
+      <div id="tool-call-trace-entries"></div>
     </div>
   </div>
 
@@ -351,13 +351,13 @@
     const chatMessages = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
     const chatSend = document.getElementById('chat-send');
-    const decisionTraceEntries = document.getElementById('decision-trace-entries');
-    const decisionTraceEmpty = document.getElementById('decision-trace-empty');
+    const toolCallTraceEntries = document.getElementById('tool-call-trace-entries');
+    const toolCallTraceEmpty = document.getElementById('tool-call-trace-empty');
     let traceStepCounter = 0;
 
     function appendTraceSteps(steps) {
       if (!steps || !steps.length) return;
-      decisionTraceEmpty.hidden = true;
+      toolCallTraceEmpty.hidden = true;
       for (const step of steps) {
         traceStepCounter += 1;
         const card = document.createElement('div');
@@ -369,9 +369,9 @@
         `;
         card.querySelector('.trace-step-label').textContent = step.label;
         card.querySelector('.trace-step-time').textContent = step.timestamp;
-        decisionTraceEntries.appendChild(card);
+        toolCallTraceEntries.appendChild(card);
       }
-      decisionTraceEntries.scrollLeft = decisionTraceEntries.scrollWidth;
+      toolCallTraceEntries.scrollLeft = toolCallTraceEntries.scrollWidth;
     }
 
     // Parses one Server-Sent-Events frame ("data: {...}") into its JSON
@@ -754,7 +754,7 @@
       if (e.key === 'Enter') handleSend();
     });
 
-    // Resizable panes: chat-vs-graph width, and decision-trace height.
+    // Resizable panes: chat-vs-graph width, and tool-call-trace height.
     // Dragging just resizes the container via inline style; the graph
     // canvas itself only picks up the new size on a full re-render (NVL
     // sizes its canvas once at construction, not on container resize),
@@ -789,7 +789,7 @@
     }
 
     const chatPaneEl = document.getElementById('chat-pane');
-    const decisionTraceEl = document.getElementById('decision-trace');
+    const toolCallTraceEl = document.getElementById('tool-call-trace');
 
     setupDragResize({
       handle: document.getElementById('chat-resize-handle'),
@@ -803,8 +803,8 @@
     setupDragResize({
       handle: document.getElementById('trace-resize-handle'),
       axis: 'y',
-      getSize: () => decisionTraceEl.getBoundingClientRect().height,
-      setSize: (h) => { decisionTraceEl.style.height = `${h}px`; },
+      getSize: () => toolCallTraceEl.getBoundingClientRect().height,
+      setSize: (h) => { toolCallTraceEl.style.height = `${h}px`; },
       min: 90,
       max: () => window.innerHeight * 0.5,
     });
