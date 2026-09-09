@@ -49,7 +49,7 @@ WHERE a.sourceId IN $ids AND b.sourceId IN $ids
 RETURN a.sourceId AS fromId, b.sourceId AS toId
 """
 
-_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847"}
+_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8"}
 _RISK_COLOR = "#D6483F"
 
 
@@ -331,6 +331,76 @@ def build_relationship_manager_delta(customer_id, relationship_manager):
         "title": "MANAGED_BY",
         "dashes": False,
     }]
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_lending_policy_delta(customer_id, product_type_code, rules):
+    """Graph delta revealing the policy section and rules checked against
+    this customer's loan (get_lending_policy) -- and any escalation path a
+    rule requires, flagged in the risk color since it means a human has to
+    sign off before the loan can proceed. Includes a Customer stub node
+    (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet."""
+    if not rules:
+        return {"nodes": [], "edges": []}
+
+    first = rules[0]
+    section_number = first.get("sectionNumber") or product_type_code
+    section_node_id = _node_id("policy", section_number)
+    section_label = f"{section_number} {first['sectionTitle']}" if first.get("sectionTitle") else section_number
+
+    nodes = [
+        _customer_stub_node(customer_id),
+        {
+            "id": section_node_id,
+            "label": section_label,
+            "group": "policy",
+            "color": _GROUP_COLORS["policy"],
+            "componentId": None,
+        },
+    ]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": section_node_id,
+        "label": "SUBJECT_TO_POLICY",
+        "title": "SUBJECT_TO_POLICY",
+        "dashes": False,
+    }]
+
+    for rule in rules:
+        rule_node_id = _node_id("policy", rule["ruleId"])
+        nodes.append({
+            "id": rule_node_id,
+            "label": f"{rule['ruleId']}: {rule.get('criterion')}",
+            "group": "policy",
+            "color": _GROUP_COLORS["policy"],
+            "componentId": None,
+        })
+        edges.append({
+            "from": section_node_id,
+            "to": rule_node_id,
+            "label": "HAS_RULE",
+            "title": "HAS_RULE",
+            "dashes": False,
+        })
+
+        if rule.get("escalationRole"):
+            escalation_node_id = _node_id("policy", f"escalation:{rule['ruleId']}")
+            nodes.append({
+                "id": escalation_node_id,
+                "label": rule["escalationRole"],
+                "group": "policy",
+                "color": _RISK_COLOR,
+                "componentId": None,
+            })
+            edges.append({
+                "from": rule_node_id,
+                "to": escalation_node_id,
+                "label": "REQUIRES_ESCALATION",
+                "title": "REQUIRES_ESCALATION",
+                "dashes": False,
+            })
+
     return {"nodes": nodes, "edges": edges}
 
 

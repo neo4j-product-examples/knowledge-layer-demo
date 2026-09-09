@@ -247,6 +247,44 @@ def test_build_relationship_manager_delta_handles_no_manager():
     assert delta == {"nodes": [], "edges": []}
 
 
+def test_build_lending_policy_delta_creates_section_and_rule_nodes():
+    rules = [
+        {
+            "ruleId": "POL-001", "criterion": "Minimum Credit Score",
+            "sectionNumber": "§4", "sectionTitle": "Term Loans", "escalationRole": None,
+        },
+        {
+            "ruleId": "POL-004", "criterion": "Maximum KYC Risk Rating",
+            "sectionNumber": "§4", "sectionTitle": "Term Loans",
+            "escalationRole": "Senior Underwriter", "escalationTrigger": "KYC risk is High",
+            "escalationRequiredAction": "Sign-off required",
+        },
+    ]
+
+    delta = graph_data.build_lending_policy_delta("C001", "LN-TERM", rules)
+
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
+    assert nodes_by_id["policy:§4"]["label"] == "§4 Term Loans"
+    assert nodes_by_id["policy:§4"]["color"] == graph_data._GROUP_COLORS["policy"]
+    assert nodes_by_id["policy:POL-001"]["label"] == "POL-001: Minimum Credit Score"
+    assert nodes_by_id["policy:escalation:POL-004"]["label"] == "Senior Underwriter"
+    assert nodes_by_id["policy:escalation:POL-004"]["color"] == graph_data._RISK_COLOR
+    assert "policy:escalation:POL-001" not in nodes_by_id
+
+    edges = {(e["from"], e["to"], e["label"]) for e in delta["edges"]}
+    assert ("meridian:C001", "policy:§4", "SUBJECT_TO_POLICY") in edges
+    assert ("policy:§4", "policy:POL-001", "HAS_RULE") in edges
+    assert ("policy:§4", "policy:POL-004", "HAS_RULE") in edges
+    assert ("policy:POL-004", "policy:escalation:POL-004", "REQUIRES_ESCALATION") in edges
+
+
+def test_build_lending_policy_delta_handles_no_rules():
+    delta = graph_data.build_lending_policy_delta("C999", "LN-TERM", [])
+
+    assert delta == {"nodes": [], "edges": []}
+
+
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],

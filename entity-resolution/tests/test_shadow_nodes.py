@@ -170,6 +170,40 @@ def test_seed_document_shadow_nodes_skips_missing_ids(fake_session):
     assert fake_session.calls == []
 
 
+def test_seed_document_shadow_nodes_seeds_loan_request_with_readable_name(fake_session):
+    shadow_nodes.seed_document_shadow_nodes(
+        fake_session,
+        persons=[], organizations=[], accounts=[], properties=[],
+        loan_requests=[{
+            "__id__": "lr1", "requestedAmount": 400000, "termYears": 10,
+            "rateType": "Fixed", "applicationId": "APP-3001", "purpose": "Expansion",
+        }],
+    )
+
+    assert len(fake_session.calls) == 1
+    query, params = fake_session.calls[0]
+    assert "MERGE (n:Shadow:LoanRequest" in query
+    assert params["rows"][0]["properties"]["name"] == "$400,000 10-yr Fixed Loan Request"
+    assert params["rows"][0]["properties"]["applicationId"] == "APP-3001"
+
+
+def test_seed_document_relationships_creates_requests_edge(fake_session):
+    shadow_nodes.seed_document_relationships(
+        fake_session,
+        worked_at_edges=[], authorized_for_edges=[], co_owns_edges=[],
+        requests_edges=[{"organizationId": "o1", "__id__": "lr1"}],
+    )
+
+    assert len(fake_session.calls) == 1
+    query, params = fake_session.calls[0]
+    assert "MERGE (a)-[r:REQUESTS]->(b)" in query
+    assert params["rows"][0] == {
+        "fromSourceGraph": "documents", "fromSourceId": "o1",
+        "toSourceGraph": "documents", "toSourceId": "lr1",
+        "properties": {},
+    }
+
+
 def test_seed_document_relationships_creates_one_call_per_edge_type(fake_session):
     shadow_nodes.seed_document_relationships(
         fake_session,

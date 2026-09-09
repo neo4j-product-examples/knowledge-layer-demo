@@ -248,32 +248,88 @@ def test_run_get_relationship_manager_handles_no_coverage(monkeypatch, fake_sess
     assert result["graph"] == {"nodes": [], "edges": []}
 
 
-def test_run_get_lending_policy_returns_rules_for_product_type(monkeypatch, fake_session):
+def test_run_get_lending_policy_returns_rules_and_graph(monkeypatch, fake_session):
     monkeypatch.setattr(
         matching, "fetch_lending_policy_rules",
-        lambda s, code: [{"ruleId": "POL-001", "criterion": "Minimum Credit Score", "threshold": 650}],
+        lambda s, code: [{
+            "ruleId": "POL-001", "criterion": "Minimum Credit Score", "threshold": 650,
+            "sectionNumber": "§4", "sectionTitle": "Term Loans", "escalationRole": None,
+        }],
     )
 
-    result = chat.run_get_lending_policy(fake_session, "LN-TERM")
+    result = chat.run_get_lending_policy(fake_session, "C001", "LN-TERM")
 
-    assert result == {
-        "productTypeCode": "LN-TERM",
-        "rules": [{"ruleId": "POL-001", "criterion": "Minimum Credit Score", "threshold": 650}],
-    }
+    assert result["productTypeCode"] == "LN-TERM"
+    assert result["rules"][0]["ruleId"] == "POL-001"
+    assert result["graph"]["nodes"][0]["id"] == "meridian:C001"
+    assert any(n["id"] == "policy:POL-001" for n in result["graph"]["nodes"])
 
 
 def test_run_tool_dispatches_get_lending_policy(monkeypatch, fake_session):
-    monkeypatch.setattr(chat, "run_get_lending_policy", lambda session, code: {"productTypeCode": code})
+    monkeypatch.setattr(chat, "run_get_lending_policy", lambda session, customer_id, code: {"customerId": customer_id, "productTypeCode": code})
 
-    result = chat.run_tool("get_lending_policy", {"product_type_code": "LN-TERM"}, fake_session)
+    result = chat.run_tool("get_lending_policy", {"customer_id": "C001", "product_type_code": "LN-TERM"}, fake_session)
 
-    assert result == {"productTypeCode": "LN-TERM"}
+    assert result == {"customerId": "C001", "productTypeCode": "LN-TERM"}
 
 
 def test_describe_tool_call_includes_product_type_code_when_present():
     label = chat.describe_tool_call("get_lending_policy", {"product_type_code": "LN-TERM"})
 
     assert label == "Checking lending policy (LN-TERM)"
+
+
+def test_describe_tool_call_combines_product_type_code_and_customer_id():
+    label = chat.describe_tool_call("get_lending_policy", {"product_type_code": "LN-TERM", "customer_id": "C001"})
+
+    assert label == "Checking lending policy (LN-TERM, C001)"
+
+
+def test_run_get_business_plan_details_shapes_org_and_loan_request(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_document_business_plan",
+        lambda s: [{
+            "name": "Rosa's Bakery", "address": "214 Maple St", "industry": "Food & Beverage",
+            "foundedDate": "2018-03", "bankingRelationshipSince": "2020-07", "bankingBranch": "Cedarville Main",
+            "requestedAmount": 400000, "termYears": 10, "rateType": "Fixed", "applicationId": "APP-3001",
+            "purpose": "Expansion", "useOfProceeds": "Build-out", "marketRationale": "Demand",
+            "repaymentRationale": "Cash flow",
+        }],
+    )
+
+    result = chat.run_get_business_plan_details(fake_session)
+
+    assert result["businessPlan"]["organizationName"] == "Rosa's Bakery"
+    assert result["businessPlan"]["bankingBranch"] == "Cedarville Main"
+    assert result["businessPlan"]["loanRequest"]["requestedAmount"] == 400000
+    assert result["businessPlan"]["loanRequest"]["applicationId"] == "APP-3001"
+
+
+def test_run_get_business_plan_details_handles_no_loan_request(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_document_business_plan",
+        lambda s: [{"name": "Rosa's Bakery", "requestedAmount": None}],
+    )
+
+    result = chat.run_get_business_plan_details(fake_session)
+
+    assert result["businessPlan"]["loanRequest"] is None
+
+
+def test_run_get_business_plan_details_handles_no_business_plan(monkeypatch, fake_session):
+    monkeypatch.setattr(matching, "fetch_document_business_plan", lambda s: [])
+
+    result = chat.run_get_business_plan_details(fake_session)
+
+    assert result["businessPlan"] is None
+
+
+def test_run_tool_dispatches_get_business_plan_details(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_business_plan_details", lambda session: {"businessPlan": "x"})
+
+    result = chat.run_tool("get_business_plan_details", {}, fake_session)
+
+    assert result == {"businessPlan": "x"}
 
 
 def test_run_tool_dispatches_get_relationship_manager(monkeypatch, fake_session):

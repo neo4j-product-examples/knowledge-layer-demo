@@ -95,9 +95,11 @@ def upload_business_plan():
             document_organizations = matching.fetch_document_organizations(session)
             document_accounts = matching.fetch_document_accounts(session)
             document_properties = matching.fetch_document_properties(session)
+            document_loan_requests = matching.fetch_document_loan_requests(session)
 
             shadow_nodes.seed_document_shadow_nodes(
-                session, document_persons, document_organizations, document_accounts, document_properties
+                session, document_persons, document_organizations, document_accounts, document_properties,
+                document_loan_requests,
             )
             shadow_nodes.seed_document_relationships(
                 session,
@@ -105,6 +107,7 @@ def upload_business_plan():
                 matching.fetch_document_authorized_for(session),
                 matching.fetch_document_co_owns(session),
                 matching.fetch_document_ownership(session),
+                document_loan_requests,
             )
 
             graph = graph_data.fetch_documents_graph_json(session)

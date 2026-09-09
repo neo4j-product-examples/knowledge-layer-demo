@@ -5,7 +5,7 @@ re-running the pipeline is always idempotent (requirements §5).
 """
 
 MATCH_REL_TYPE = "SIMILAR_TO"
-STRUCTURAL_REL_TYPES = ["OWNS_ACCOUNT", "WORKED_AT", "AUTHORIZED_FOR", "CO_OWNS", "OWNS", "HAS_PARENT"]
+STRUCTURAL_REL_TYPES = ["OWNS_ACCOUNT", "WORKED_AT", "AUTHORIZED_FOR", "CO_OWNS", "OWNS", "HAS_PARENT", "REQUESTS"]
 ALL_REL_TYPES = [MATCH_REL_TYPE] + STRUCTURAL_REL_TYPES
 
 _MERGE_SHADOW_NODE = """
@@ -200,9 +200,10 @@ def create_document_shadow_node(session, label, source_id, properties):
     )
 
 
-def seed_document_shadow_nodes(session, persons, organizations, accounts, properties):
-    """Shadows every Person/Organization/Account/Property node from the
-    documents graph, run when a document is uploaded (not on startup)."""
+def seed_document_shadow_nodes(session, persons, organizations, accounts, properties, loan_requests=None):
+    """Shadows every Person/Organization/Account/Property/LoanRequest node
+    from the documents graph, run when a document is uploaded (not on
+    startup)."""
     person_rows = [
         {"sourceId": p["__id__"], "properties": {"customerID": p.get("customerID"), "name": p.get("name")}}
         for p in persons if p.get("__id__") is not None
@@ -227,8 +228,27 @@ def seed_document_shadow_nodes(session, persons, organizations, accounts, proper
     ]
     _merge_shadow_nodes_batch(session, "Property", "documents", property_rows)
 
+    loan_request_rows = [
+        {
+            "sourceId": lr["__id__"],
+            "properties": {
+                "name": (
+                    f"${lr['requestedAmount']:,.0f} {lr.get('termYears')}-yr "
+                    f"{lr.get('rateType') or ''} Loan Request"
+                ).replace("  ", " ") if lr.get("requestedAmount") is not None else "Loan Request",
+                "requestedAmount": lr.get("requestedAmount"),
+                "termYears": lr.get("termYears"),
+                "rateType": lr.get("rateType"),
+                "applicationId": lr.get("applicationId"),
+                "purpose": lr.get("purpose"),
+            },
+        }
+        for lr in (loan_requests or []) if lr.get("__id__") is not None
+    ]
+    _merge_shadow_nodes_batch(session, "LoanRequest", "documents", loan_request_rows)
 
-def seed_document_relationships(session, worked_at_edges, authorized_for_edges, co_owns_edges, ownership_edges=None):
+
+def seed_document_relationships(session, worked_at_edges, authorized_for_edges, co_owns_edges, ownership_edges=None, requests_edges=None):
     """Shadows the documents graph's own Person->Organization/Account/Property
     relationships between the already-shadowed documents nodes."""
     worked_at_rows = [
@@ -270,6 +290,16 @@ def seed_document_relationships(session, worked_at_edges, authorized_for_edges, 
         for e in (ownership_edges or []) if e.get("personId") is not None and e.get("organizationId") is not None
     ]
     create_shadow_relationships_batch(session, "OWNS", ownership_rows)
+
+    requests_rows = [
+        {
+            "fromSourceGraph": "documents", "fromSourceId": e["organizationId"],
+            "toSourceGraph": "documents", "toSourceId": e["__id__"],
+            "properties": {},
+        }
+        for e in (requests_edges or []) if e.get("organizationId") is not None and e.get("__id__") is not None
+    ]
+    create_shadow_relationships_batch(session, "REQUESTS", requests_rows)
 
 
 def create_similar_to(session, match):

@@ -20,8 +20,9 @@ Meridian customer record, and every other tool needs that customerId as input.
 
 For loan-decision questions ("should we approve this loan", "what's their credit
 picture look like"), pull together get_customer_risk_profile, get_customer_credit_score,
-get_customer_transaction_summary, get_customer_loan_applications, and
-get_relationship_manager rather than answering from just one of them.
+get_customer_transaction_summary, get_customer_loan_applications,
+get_relationship_manager, and get_business_plan_details rather than answering
+from just one of them.
 
 For a recommendation on a specific loan (approve/decline/conditional), also call
 get_lending_policy for the applicable product type (infer it from the loan application's
@@ -30,7 +31,13 @@ actual figures against each cited rule by its policy section number, rather than
 reasoning about creditworthiness in the abstract. If any policy rule references
 affiliates, related entities, or common ownership, you must call
 find_parent_companies for this customer to check them -- do not assume the
-applicant's own facilities are the only ones that rule applies to."""
+applicant's own facilities are the only ones that rule applies to.
+
+get_business_plan_details is the applicant's own account of the loan (their stated
+use of proceeds, market and repayment rationale) -- it is not Meridian's system of
+record. Note where it corroborates or conflicts with Meridian's own data (the formal
+application, transactions, credit history); don't treat the two as interchangeable
+sources or blend them into one unsourced claim."""
 
 TOOLS = [
     {
@@ -149,6 +156,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
                 "product_type_code": {
                     "type": "string",
                     "description": (
@@ -158,8 +166,21 @@ TOOLS = [
                     ),
                 },
             },
-            "required": ["product_type_code"],
+            "required": ["customer_id", "product_type_code"],
         },
+    },
+    {
+        "name": "get_business_plan_details",
+        "description": (
+            "Returns the uploaded business plan's own account of the business "
+            "(founding date, banking history/branch) and its own stated loan "
+            "request (amount, term, purpose, use of proceeds, market rationale, "
+            "repayment rationale) -- the applicant's side of the story, as "
+            "opposed to Meridian's own systems. Use this for loan-decision "
+            "questions to check the business's own narrative against the bank's "
+            "records (credit score, transactions, the formal application on file)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
     },
 ]
 
@@ -246,6 +267,7 @@ TOOL_STEP_LABELS = {
     "get_customer_transaction_summary": "Pulling transactions from virtual graph",
     "get_relationship_manager": "Checking relationship-manager coverage from virtual graph",
     "get_lending_policy": "Checking lending policy",
+    "get_business_plan_details": "Reading business plan for loan request details",
 }
 
 
@@ -255,8 +277,8 @@ def describe_tool_call(name, tool_input):
     the traceability layer: every step the agent took, in plain language."""
     label = TOOL_STEP_LABELS.get(name, f"Running {name}")
     tool_input = tool_input or {}
-    detail = tool_input.get("customer_id") or tool_input.get("product_type_code")
-    return f"{label} ({detail})" if detail else label
+    details = [tool_input[k] for k in ("product_type_code", "customer_id") if tool_input.get(k)]
+    return f"{label} ({', '.join(details)})" if details else label
 
 
 def run_get_customer_risk_profile(session, customer_id):
@@ -339,9 +361,37 @@ def run_get_relationship_manager(session, customer_id):
     return {"customerId": customer_id, "relationshipManager": relationship_manager, "graph": graph}
 
 
-def run_get_lending_policy(session, product_type_code):
+def run_get_lending_policy(session, customer_id, product_type_code):
     rules = matching.fetch_lending_policy_rules(session, product_type_code)
-    return {"productTypeCode": product_type_code, "rules": rules}
+    graph = graph_data.build_lending_policy_delta(customer_id, product_type_code, rules)
+    return {"productTypeCode": product_type_code, "rules": rules, "graph": graph}
+
+
+def run_get_business_plan_details(session):
+    rows = matching.fetch_document_business_plan(session)
+    if not rows:
+        return {"businessPlan": None}
+    row = rows[0]
+    return {
+        "businessPlan": {
+            "organizationName": row.get("name"),
+            "address": row.get("address"),
+            "industry": row.get("industry"),
+            "foundedDate": row.get("foundedDate"),
+            "bankingRelationshipSince": row.get("bankingRelationshipSince"),
+            "bankingBranch": row.get("bankingBranch"),
+            "loanRequest": {
+                "requestedAmount": row.get("requestedAmount"),
+                "termYears": row.get("termYears"),
+                "rateType": row.get("rateType"),
+                "applicationId": row.get("applicationId"),
+                "purpose": row.get("purpose"),
+                "useOfProceeds": row.get("useOfProceeds"),
+                "marketRationale": row.get("marketRationale"),
+                "repaymentRationale": row.get("repaymentRationale"),
+            } if row.get("requestedAmount") is not None else None,
+        },
+    }
 
 
 def run_tool(name, tool_input, session):
@@ -358,9 +408,11 @@ def run_tool(name, tool_input, session):
     if name == "get_customer_transaction_summary":
         return run_get_customer_transaction_summary(session, tool_input["customer_id"])
     if name == "get_lending_policy":
-        return run_get_lending_policy(session, tool_input["product_type_code"])
+        return run_get_lending_policy(session, tool_input["customer_id"], tool_input["product_type_code"])
     if name == "get_relationship_manager":
         return run_get_relationship_manager(session, tool_input["customer_id"])
+    if name == "get_business_plan_details":
+        return run_get_business_plan_details(session)
     return {"error": f"Unknown tool: {name}"}
 
 
