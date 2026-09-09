@@ -196,6 +196,49 @@ def fetch_document_organizations(session):
     return [dict(r) for r in result]
 
 
+def fetch_document_loan_requests(session):
+    """Organization-[:REQUESTS]->LoanRequest rows, for shadowing the loan
+    request onto the canvas alongside the Organization that made it (see
+    fetch_document_business_plan for the fuller narrative used by the
+    get_business_plan_details chat tool -- this is just the shadow-able
+    node/edge shape)."""
+    result = session.run(
+        """
+        USE meridianComposite.documents
+        MATCH (o:Organization)-[:REQUESTS]->(lr:LoanRequest)
+        RETURN lr.__id__ AS __id__, o.__id__ AS organizationId,
+               lr.requestedAmount AS requestedAmount, lr.termYears AS termYears,
+               lr.rateType AS rateType, lr.applicationId AS applicationId,
+               lr.purpose AS purpose
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_document_business_plan(session):
+    """The uploaded business plan's own account of its business and its
+    loan ask (Organization enriched with founding/banking-history facts,
+    plus its LoanRequest if the document states one) -- as opposed to the
+    bank's own systems (meridian), this is what the applicant itself said,
+    for the agent to weigh alongside (not instead of) the bank's records."""
+    result = session.run(
+        """
+        USE meridianComposite.documents
+        MATCH (o:Organization)
+        OPTIONAL MATCH (o)-[:REQUESTS]->(lr:LoanRequest)
+        RETURN o.__id__ AS __id__, o.name AS name, o.address AS address,
+               o.ein AS ein, o.industry AS industry, o.foundedDate AS foundedDate,
+               o.bankingRelationshipSince AS bankingRelationshipSince,
+               o.bankingBranch AS bankingBranch,
+               lr.requestedAmount AS requestedAmount, lr.termYears AS termYears,
+               lr.rateType AS rateType, lr.applicationId AS applicationId,
+               lr.purpose AS purpose, lr.useOfProceeds AS useOfProceeds,
+               lr.marketRationale AS marketRationale, lr.repaymentRationale AS repaymentRationale
+        """
+    )
+    return [dict(r) for r in result]
+
+
 def fetch_document_accounts(session):
     result = session.run(
         """
@@ -345,6 +388,61 @@ def fetch_meridian_customer_transactions(session):
                t.transactionType AS transactionType, t.amount AS amount,
                t.transactionDate AS transactionDate
         """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_customer_relationship_managers(session):
+    """Customer-[:MANAGED_BY]->Employee rows -- which relationship manager
+    (if any) already covers this customer, for loan-decision questions
+    (is there existing human context/coverage on this relationship)."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:MANAGED_BY]->(e:Employee)
+        RETURN c.customerId AS customerId, e.employeeId AS employeeId,
+               e.fullName AS fullName, e.role AS role
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_employee_branches(session):
+    """Employee-[:WORKS_AT]->Branch rows, for showing which branch a
+    customer's relationship manager works out of."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (e:Employee)-[:WORKS_AT]->(b:Branch)
+        RETURN e.employeeId AS employeeId, b.branchName AS branchName,
+               b.city AS city, b.state AS state
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_lending_policy_rules(session, product_type_code):
+    """PolicyDocument-[:HAS_SECTION]->PolicySection-[:HAS_RULE]->PolicyRule
+    rows for one product type, from the lendingpolicy constituent (separate
+    AuraDB, not the meridian banking data) -- the bank's own underwriting
+    manual, so a loan recommendation can be checked against cited policy
+    rather than reasoned freeform. Includes each rule's escalation path
+    (REQUIRES_ESCALATION), if the policy calls for one."""
+    result = session.run(
+        """
+        USE meridianComposite.lendingpolicy
+        MATCH (p:ProductType {productTypeCode: $productTypeCode})<-[:APPLIES_TO]-(s:PolicySection)
+        MATCH (d:PolicyDocument)-[:HAS_SECTION]->(s)
+        MATCH (s)-[:HAS_RULE]->(r:PolicyRule)
+        OPTIONAL MATCH (r)-[:REQUIRES_ESCALATION]->(e:EscalationPath)
+        RETURN d.title AS documentTitle, d.version AS documentVersion,
+               s.sectionNumber AS sectionNumber, s.title AS sectionTitle,
+               r.ruleId AS ruleId, r.criterion AS criterion, r.comparison AS comparison,
+               r.threshold AS threshold, r.unit AS unit, r.section AS section, r.description AS description,
+               e.role AS escalationRole, e.trigger AS escalationTrigger,
+               e.requiredAction AS escalationRequiredAction
+        """,
+        productTypeCode=product_type_code,
     )
     return [dict(r) for r in result]
 

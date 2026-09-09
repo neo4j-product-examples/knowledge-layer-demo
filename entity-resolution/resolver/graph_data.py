@@ -49,12 +49,31 @@ WHERE a.sourceId IN $ids AND b.sourceId IN $ids
 RETURN a.sourceId AS fromId, b.sourceId AS toId
 """
 
-_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847"}
+_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8"}
 _RISK_COLOR = "#D6483F"
 
 
 def _node_id(source_graph, source_id):
     return f"{source_graph}:{source_id}"
+
+
+def _customer_stub_node(customer_id):
+    """A minimal Customer node, included in every per-tool delta below so
+    the edge back to it always resolves. Without this, asking about a
+    customer's risk profile/credit score/etc. by id directly (skipping
+    find_customer, which is what normally puts the Customer node on
+    canvas) leaves that entity's node floating with no edge -- the
+    frontend has to drop dangling edges rather than crash, so the node
+    just renders disconnected. If find_customer/find_parent_companies also
+    ran, their nicer name-labeled node for the same id simply overwrites
+    this stub client-side (both keyed by the same node id)."""
+    return {
+        "id": _node_id("meridian", customer_id),
+        "label": f"Customer: {customer_id}",
+        "group": "meridian",
+        "color": _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }
 
 
 def _display_label(row):
@@ -152,12 +171,16 @@ def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
 
 def build_risk_profile_delta(customer_id, kyc, facilities):
     """Graph delta revealing a customer's KYC status and loan facilities
-    (e.g. from get_customer_risk_profile). Assumes the Customer node itself
-    is already on the canvas from an earlier find_customer/find_parent_companies
-    call. Facilities in Delinquent status render in the risk color, same
-    threshold as build_hierarchy_delta."""
+    (e.g. from get_customer_risk_profile). Includes a Customer stub node
+    (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet. Facilities in
+    Delinquent status render in the risk color, same threshold as
+    build_hierarchy_delta."""
+    if not kyc and not facilities:
+        return {"nodes": [], "edges": []}
+
     customer_node_id = _node_id("meridian", customer_id)
-    nodes = []
+    nodes = [_customer_stub_node(customer_id)]
     edges = []
 
     if kyc:
@@ -200,14 +223,15 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
 
 def build_credit_score_delta(customer_id, latest_score):
     """Graph delta revealing a customer's latest credit score (from
-    get_customer_credit_score). Assumes the Customer node is already on
-    the canvas."""
+    get_customer_credit_score). Includes a Customer stub node (see
+    _customer_stub_node) so this renders connected even if find_customer
+    hasn't put the real one on canvas yet."""
     if not latest_score:
         return {"nodes": [], "edges": []}
 
     score_id = latest_score.get("scoreId") or f"CS-{customer_id}"
     score_node_id = _node_id("meridian", score_id)
-    nodes = [{
+    nodes = [_customer_stub_node(customer_id), {
         "id": score_node_id,
         "label": f"Credit Score: {latest_score.get('creditScore')} ({latest_score.get('scoreBand')})",
         "group": "meridian",
@@ -226,10 +250,14 @@ def build_credit_score_delta(customer_id, latest_score):
 
 def build_loan_application_delta(customer_id, applications):
     """Graph delta revealing a customer's loan applications (from
-    get_customer_loan_applications). Assumes the Customer node is already
-    on the canvas."""
+    get_customer_loan_applications). Includes a Customer stub node (see
+    _customer_stub_node) so this renders connected even if find_customer
+    hasn't put the real one on canvas yet."""
+    if not applications:
+        return {"nodes": [], "edges": []}
+
     customer_node_id = _node_id("meridian", customer_id)
-    nodes = []
+    nodes = [_customer_stub_node(customer_id)]
     edges = []
     for application in applications:
         app_node_id = _node_id("meridian", application["applicationId"])
@@ -260,7 +288,7 @@ def build_transaction_summary_delta(customer_id, summary):
 
     net = summary.get("netCashFlow") or 0
     summary_node_id = _node_id("meridian", f"TXN-SUMMARY-{customer_id}")
-    nodes = [{
+    nodes = [_customer_stub_node(customer_id), {
         "id": summary_node_id,
         "label": f"Transactions: {summary['transactionCount']} (net {'-' if net < 0 else '+'}${abs(net):,.2f})",
         "group": "meridian",
@@ -274,6 +302,105 @@ def build_transaction_summary_delta(customer_id, summary):
         "title": "HAS_TRANSACTION_SUMMARY",
         "dashes": False,
     }]
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_relationship_manager_delta(customer_id, relationship_manager):
+    """Graph delta revealing the Employee who covers this customer as its
+    relationship manager (get_relationship_manager). Includes a Customer
+    stub node (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet."""
+    if not relationship_manager:
+        return {"nodes": [], "edges": []}
+
+    employee_id = relationship_manager["employeeId"]
+    employee_node_id = _node_id("meridian", employee_id)
+    name = relationship_manager.get("fullName") or employee_id
+    role = relationship_manager.get("role")
+    nodes = [_customer_stub_node(customer_id), {
+        "id": employee_node_id,
+        "label": f"{name} ({role})" if role else name,
+        "group": "meridian",
+        "color": _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": employee_node_id,
+        "label": "MANAGED_BY",
+        "title": "MANAGED_BY",
+        "dashes": False,
+    }]
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_lending_policy_delta(customer_id, product_type_code, rules):
+    """Graph delta revealing the policy section and rules checked against
+    this customer's loan (get_lending_policy) -- and any escalation path a
+    rule requires, flagged in the risk color since it means a human has to
+    sign off before the loan can proceed. Includes a Customer stub node
+    (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet."""
+    if not rules:
+        return {"nodes": [], "edges": []}
+
+    first = rules[0]
+    section_number = first.get("sectionNumber") or product_type_code
+    section_node_id = _node_id("policy", section_number)
+    section_label = f"{section_number} {first['sectionTitle']}" if first.get("sectionTitle") else section_number
+
+    nodes = [
+        _customer_stub_node(customer_id),
+        {
+            "id": section_node_id,
+            "label": section_label,
+            "group": "policy",
+            "color": _GROUP_COLORS["policy"],
+            "componentId": None,
+        },
+    ]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": section_node_id,
+        "label": "SUBJECT_TO_POLICY",
+        "title": "SUBJECT_TO_POLICY",
+        "dashes": False,
+    }]
+
+    for rule in rules:
+        rule_node_id = _node_id("policy", rule["ruleId"])
+        nodes.append({
+            "id": rule_node_id,
+            "label": f"{rule['ruleId']}: {rule.get('criterion')}",
+            "group": "policy",
+            "color": _GROUP_COLORS["policy"],
+            "componentId": None,
+        })
+        edges.append({
+            "from": section_node_id,
+            "to": rule_node_id,
+            "label": "HAS_RULE",
+            "title": "HAS_RULE",
+            "dashes": False,
+        })
+
+        if rule.get("escalationRole"):
+            escalation_node_id = _node_id("policy", f"escalation:{rule['ruleId']}")
+            nodes.append({
+                "id": escalation_node_id,
+                "label": rule["escalationRole"],
+                "group": "policy",
+                "color": _RISK_COLOR,
+                "componentId": None,
+            })
+            edges.append({
+                "from": rule_node_id,
+                "to": escalation_node_id,
+                "label": "REQUIRES_ESCALATION",
+                "title": "REQUIRES_ESCALATION",
+                "dashes": False,
+            })
+
     return {"nodes": nodes, "edges": edges}
 
 

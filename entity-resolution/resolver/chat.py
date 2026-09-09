@@ -13,14 +13,31 @@ Use the tools available to answer the user's questions and take the actions they
 Prefer calling a tool over guessing, and never invent names, IDs, or figures that a tool
 didn't return. Be concise in your final answers.
 
-If a request needs a Meridian customerId you don't already know (from an earlier tool
-result in this conversation), call find_customer first to resolve one from the business
-plan's entities before calling any tool that requires a customer_id.
+If a request names a business (e.g. "Rosa's Bakery") rather than a Meridian customerId
+you already know from earlier in this conversation, you must call find_customer FIRST,
+before any other tool -- this is what connects the business plan's entities to an actual
+Meridian customer record, and every other tool needs that customerId as input.
 
 For loan-decision questions ("should we approve this loan", "what's their credit
 picture look like"), pull together get_customer_risk_profile, get_customer_credit_score,
-get_customer_transaction_summary, and get_customer_loan_applications rather than
-answering from just one of them."""
+get_customer_transaction_summary, get_customer_loan_applications,
+get_relationship_manager, and get_business_plan_details rather than answering
+from just one of them.
+
+For a recommendation on a specific loan (approve/decline/conditional), also call
+get_lending_policy for the applicable product type (infer it from the loan application's
+purpose/term -- a standard business term loan is 'LN-TERM') and check the applicant's
+actual figures against each cited rule by its policy section number, rather than
+reasoning about creditworthiness in the abstract. If any policy rule references
+affiliates, related entities, or common ownership, you must call
+find_parent_companies for this customer to check them -- do not assume the
+applicant's own facilities are the only ones that rule applies to.
+
+get_business_plan_details is the applicant's own account of the loan (their stated
+use of proceeds, market and repayment rationale) -- it is not Meridian's system of
+record. Note where it corroborates or conflicts with Meridian's own data (the formal
+application, transactions, credit history); don't treat the two as interchangeable
+sources or blend them into one unsourced claim."""
 
 TOOLS = [
     {
@@ -110,6 +127,61 @@ TOOLS = [
             "required": ["customer_id"],
         },
     },
+    {
+        "name": "get_relationship_manager",
+        "description": (
+            "Given a Meridian customerId, returns the relationship manager (banker) "
+            "already assigned to cover this customer, and the branch they work out "
+            "of. Use this to check whether existing human coverage/context exists "
+            "on this relationship before making a loan-decision recommendation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+            },
+            "required": ["customer_id"],
+        },
+    },
+    {
+        "name": "get_lending_policy",
+        "description": (
+            "Returns Meridian Bank's underwriting policy criteria for a loan product "
+            "type -- e.g. minimum credit score, minimum debt service coverage ratio, "
+            "maximum loan-to-cash-flow, delinquency requirements -- each with a citable "
+            "policy section number. Use this for loan-decision questions so the "
+            "recommendation checks the applicant's actual figures against cited bank "
+            "policy instead of general reasoning."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "product_type_code": {
+                    "type": "string",
+                    "description": (
+                        "One of: 'LN-TERM' (Term Loan), 'LN-SBA' (SBA Loan), "
+                        "'LN-LOC' (Line of Credit), 'LN-CRE' (Commercial Real Estate Loan), "
+                        "'LN-EQP' (Equipment Loan)."
+                    ),
+                },
+            },
+            "required": ["customer_id", "product_type_code"],
+        },
+    },
+    {
+        "name": "get_business_plan_details",
+        "description": (
+            "Returns the uploaded business plan's own account of the business "
+            "(founding date, banking history/branch) and its own stated loan "
+            "request (amount, term, purpose, use of proceeds, market rationale, "
+            "repayment rationale) -- the applicant's side of the story, as "
+            "opposed to Meridian's own systems. Use this for loan-decision "
+            "questions to check the business's own narrative against the bank's "
+            "records (credit score, transactions, the formal application on file)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -187,22 +259,26 @@ def run_find_parent_companies(session, customer_id):
 
 
 TOOL_STEP_LABELS = {
-    "find_customer": "Matching business plan entities to Meridian customers",
-    "find_parent_companies": "Walking corporate ownership hierarchy",
+    "find_customer": "Finding matching Meridian customer",
+    "find_parent_companies": "Finding parent companies",
     "get_customer_risk_profile": "Pulling KYC and risk profile from virtual graph",
     "get_customer_credit_score": "Pulling credit score from virtual graph",
     "get_customer_loan_applications": "Pulling loan applications from virtual graph",
     "get_customer_transaction_summary": "Pulling transactions from virtual graph",
+    "get_relationship_manager": "Checking relationship-manager coverage from virtual graph",
+    "get_lending_policy": "Checking lending policy",
+    "get_business_plan_details": "Reading business plan for loan request details",
 }
 
 
 def describe_tool_call(name, tool_input):
     """Human-readable label for one tool call, used both for the live
-    "thinking" status and for its entry in the decision trace -- this is
+    "thinking" status and for its entry in the tool call trace -- this is
     the traceability layer: every step the agent took, in plain language."""
     label = TOOL_STEP_LABELS.get(name, f"Running {name}")
-    customer_id = (tool_input or {}).get("customer_id")
-    return f"{label} ({customer_id})" if customer_id else label
+    tool_input = tool_input or {}
+    details = [tool_input[k] for k in ("product_type_code", "customer_id") if tool_input.get(k)]
+    return f"{label} ({', '.join(details)})" if details else label
 
 
 def run_get_customer_risk_profile(session, customer_id):
@@ -263,6 +339,61 @@ def run_get_customer_transaction_summary(session, customer_id):
     return summary
 
 
+def run_get_relationship_manager(session, customer_id):
+    managers = matching.fetch_meridian_customer_relationship_managers(session)
+    branches = matching.fetch_meridian_employee_branches(session)
+    branch_by_employee = {b["employeeId"]: b for b in branches}
+
+    manager = next((m for m in managers if m["customerId"] == customer_id), None)
+    relationship_manager = None
+    if manager:
+        branch = branch_by_employee.get(manager["employeeId"], {})
+        relationship_manager = {
+            "employeeId": manager["employeeId"],
+            "fullName": manager["fullName"],
+            "role": manager["role"],
+            "branchName": branch.get("branchName"),
+            "city": branch.get("city"),
+            "state": branch.get("state"),
+        }
+
+    graph = graph_data.build_relationship_manager_delta(customer_id, relationship_manager)
+    return {"customerId": customer_id, "relationshipManager": relationship_manager, "graph": graph}
+
+
+def run_get_lending_policy(session, customer_id, product_type_code):
+    rules = matching.fetch_lending_policy_rules(session, product_type_code)
+    graph = graph_data.build_lending_policy_delta(customer_id, product_type_code, rules)
+    return {"productTypeCode": product_type_code, "rules": rules, "graph": graph}
+
+
+def run_get_business_plan_details(session):
+    rows = matching.fetch_document_business_plan(session)
+    if not rows:
+        return {"businessPlan": None}
+    row = rows[0]
+    return {
+        "businessPlan": {
+            "organizationName": row.get("name"),
+            "address": row.get("address"),
+            "industry": row.get("industry"),
+            "foundedDate": row.get("foundedDate"),
+            "bankingRelationshipSince": row.get("bankingRelationshipSince"),
+            "bankingBranch": row.get("bankingBranch"),
+            "loanRequest": {
+                "requestedAmount": row.get("requestedAmount"),
+                "termYears": row.get("termYears"),
+                "rateType": row.get("rateType"),
+                "applicationId": row.get("applicationId"),
+                "purpose": row.get("purpose"),
+                "useOfProceeds": row.get("useOfProceeds"),
+                "marketRationale": row.get("marketRationale"),
+                "repaymentRationale": row.get("repaymentRationale"),
+            } if row.get("requestedAmount") is not None else None,
+        },
+    }
+
+
 def run_tool(name, tool_input, session):
     if name == "find_customer":
         return run_find_customer(session)
@@ -276,6 +407,12 @@ def run_tool(name, tool_input, session):
         return run_get_customer_loan_applications(session, tool_input["customer_id"])
     if name == "get_customer_transaction_summary":
         return run_get_customer_transaction_summary(session, tool_input["customer_id"])
+    if name == "get_lending_policy":
+        return run_get_lending_policy(session, tool_input["customer_id"], tool_input["product_type_code"])
+    if name == "get_relationship_manager":
+        return run_get_relationship_manager(session, tool_input["customer_id"])
+    if name == "get_business_plan_details":
+        return run_get_business_plan_details(session)
     return {"error": f"Unknown tool: {name}"}
 
 

@@ -137,6 +137,39 @@ def test_fetch_meridian_account_ownership_uses_meridian_constituent(fake_session
     assert "OWNS_ACCOUNT" in query
 
 
+def test_fetch_document_loan_requests_uses_documents_constituent(fake_session):
+    fake_session.when(
+        "MATCH (o:Organization)-[:REQUESTS]->(lr:LoanRequest)",
+        [{"__id__": "lr1", "organizationId": "o1", "requestedAmount": 400000, "termYears": 10}],
+    )
+
+    rows = matching.fetch_document_loan_requests(fake_session)
+
+    assert rows == [{"__id__": "lr1", "organizationId": "o1", "requestedAmount": 400000, "termYears": 10}]
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.documents" in query
+
+
+def test_fetch_document_business_plan_uses_documents_constituent(fake_session):
+    fake_session.when(
+        "MATCH (o:Organization)",
+        [{
+            "__id__": "o1", "name": "Rosa's Bakery", "address": "214 Maple St", "ein": "84-1023456",
+            "industry": "Food & Beverage", "foundedDate": "2018-03", "bankingRelationshipSince": "2020-07",
+            "bankingBranch": "Cedarville Main", "requestedAmount": 400000, "termYears": 10,
+            "rateType": "Fixed", "applicationId": "APP-3001", "purpose": "Expansion",
+            "useOfProceeds": "Build-out", "marketRationale": "Demand", "repaymentRationale": "Cash flow",
+        }],
+    )
+
+    rows = matching.fetch_document_business_plan(fake_session)
+
+    assert rows[0]["name"] == "Rosa's Bakery"
+    assert rows[0]["requestedAmount"] == 400000
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.documents" in query
+
+
 def test_fetch_document_properties_uses_documents_constituent(fake_session):
     fake_session.when("MATCH (p:Property)", [{"__id__": "pr1", "name": "123 Main St"}])
 
@@ -248,6 +281,52 @@ def test_fetch_meridian_customer_transactions_uses_meridian_constituent(fake_ses
     assert rows[0]["transactionId"] == "T001"
     query, _ = fake_session.calls[0]
     assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_customer_relationship_managers_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "MANAGED_BY",
+        [{"customerId": "C001", "employeeId": "EMP002", "fullName": "Jamie Arnold", "role": "Relationship Manager"}],
+    )
+
+    rows = matching.fetch_meridian_customer_relationship_managers(fake_session)
+
+    assert rows[0]["fullName"] == "Jamie Arnold"
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_employee_branches_uses_meridian_constituent(fake_session):
+    fake_session.when(
+        "WORKS_AT",
+        [{"employeeId": "EMP002", "branchName": "Cedarville Main", "city": "Cedarville", "state": "OH"}],
+    )
+
+    rows = matching.fetch_meridian_employee_branches(fake_session)
+
+    assert rows[0]["branchName"] == "Cedarville Main"
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_lending_policy_rules_uses_lendingpolicy_constituent(fake_session):
+    fake_session.when(
+        "HAS_RULE",
+        [{
+            "documentTitle": "Meridian Bank Commercial Lending Policy Manual", "documentVersion": "3.2",
+            "sectionNumber": "§4", "sectionTitle": "Term Loans",
+            "ruleId": "POL-001", "criterion": "Minimum Credit Score", "comparison": ">=",
+            "threshold": 650, "unit": "score", "section": "§4.1", "description": "...",
+            "escalationRole": None, "escalationTrigger": None, "escalationRequiredAction": None,
+        }],
+    )
+
+    rows = matching.fetch_lending_policy_rules(fake_session, "LN-TERM")
+
+    assert rows[0]["ruleId"] == "POL-001"
+    query, params = fake_session.calls[0]
+    assert "USE meridianComposite.lendingpolicy" in query
+    assert params["productTypeCode"] == "LN-TERM"
 
 
 def test_fetch_document_ownership_uses_documents_constituent(fake_session):
