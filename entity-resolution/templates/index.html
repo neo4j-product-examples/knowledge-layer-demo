@@ -374,29 +374,15 @@
       decisionTraceEntries.scrollLeft = decisionTraceEntries.scrollWidth;
     }
 
-    // Replays the real tool-call sequence just returned by the server as a
-    // sequence of "thinking" status updates, then a final synthetic step --
-    // the work already happened server-side, this just narrates it so the
-    // live status reads like the decision trace it's about to populate.
-    // Replays the real tool-call sequence just returned by the server: each
-    // step's own delta gets merged and rendered as its label is narrated in
-    // the "thinking" bubble, so bubbles appear on the graph one at a time as
-    // the agent's reasoning is read out, instead of the full graph
-    // materializing all at once after the whole answer is ready. The work
-    // already happened server-side -- this is a narration of it, not the
-    // work itself.
-    async function narrateSteps(thinkingDiv, steps) {
-      for (const step of (steps || [])) {
-        thinkingDiv.textContent = step.label;
-        if (step.graph && ((step.graph.nodes || []).length || (step.graph.edges || []).length)) {
-          mergeGraphData(step.graph);
-          renderGraph();
-        }
-        appendTraceSteps([step]);
-        await new Promise(resolve => setTimeout(resolve, 550));
+    // Parses one Server-Sent-Events frame ("data: {...}") into its JSON
+    // payload, or null if the frame isn't a data frame.
+    function parseSseFrame(frame) {
+      if (!frame.startsWith('data: ')) return null;
+      try {
+        return JSON.parse(frame.slice(6));
+      } catch (e) {
+        return null;
       }
-      thinkingDiv.textContent = 'Populating decision trace…';
-      await new Promise(resolve => setTimeout(resolve, 550));
     }
 
     function attachInteractions(nvlInstance) {
@@ -686,28 +672,73 @@
       chatInput.disabled = true;
 
       const thinking = addThinkingMessage();
+      let handled = false;
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text }),
         });
-        const data = await res.json();
-        if (data.error) {
+
+        // Pre-flight failures (missing message, no API key) return a plain
+        // JSON error before any streaming starts -- everything past
+        // validation streams as Server-Sent Events instead.
+        if ((res.headers.get('content-type') || '').includes('application/json')) {
+          const data = await res.json();
           thinking.remove();
-          addMessage('assistant', data.error);
+          addMessage('assistant', data.error || 'Something went wrong talking to the assistant.');
           return;
         }
-        await narrateSteps(thinking, data.steps);
-        thinking.remove();
-        addMessage('assistant', data.reply || '(no response)');
-        // Safety net: narrateSteps already merged/rendered each step's own
-        // delta and appended its own trace card, so this is normally a
-        // no-op re-merge of the same data -- kept in case a future
-        // response ever carries graph data outside the per-step deltas.
-        if (data.graph && data.graph.nodes && data.graph.nodes.length) {
-          mergeGraphData(data.graph);
-          renderGraph();
+        if (!res.ok || !res.body) {
+          thinking.remove();
+          addMessage('assistant', 'Something went wrong talking to the assistant.');
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let sepIndex;
+          while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, sepIndex);
+            buffer = buffer.slice(sepIndex + 2);
+            const event = parseSseFrame(frame);
+            if (!event) continue;
+
+            if (event.type === 'step') {
+              // Real progress: this tool call just actually finished
+              // server-side, right now -- not a replay.
+              thinking.textContent = event.label;
+              if (event.graph && ((event.graph.nodes || []).length || (event.graph.edges || []).length)) {
+                mergeGraphData(event.graph);
+                renderGraph();
+              }
+              appendTraceSteps([event]);
+            } else if (event.type === 'done') {
+              handled = true;
+              thinking.remove();
+              addMessage('assistant', event.reply || '(no response)');
+              if (event.graph && event.graph.nodes && event.graph.nodes.length) {
+                mergeGraphData(event.graph);
+                renderGraph();
+              }
+            } else if (event.type === 'error') {
+              handled = true;
+              thinking.remove();
+              addMessage('assistant', event.error || 'Something went wrong talking to the assistant.');
+            }
+          }
+        }
+
+        if (!handled) {
+          thinking.remove();
+          addMessage('assistant', 'Something went wrong talking to the assistant.');
         }
       } catch (e) {
         thinking.remove();

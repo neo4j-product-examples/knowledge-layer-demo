@@ -5,7 +5,7 @@ import os
 
 import anthropic
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from resolver import chat as chat_tools
 from resolver import db, graph_data, matching, shadow_nodes
@@ -178,11 +178,23 @@ def find_parent_companies():
         return jsonify({"error": "Could not look up the corporate hierarchy."}), 500
 
 
+def _sse_event(payload):
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     """Real chat: a tool-use agent loop over the same actions the scripted
     UI used to call directly, so the model decides what to do instead of
-    the UI hardcoding two fixed steps."""
+    the UI hardcoding two fixed steps.
+
+    Streams as Server-Sent Events so each tool result reaches the client
+    the instant it actually completes -- the graph/decision-trace update in
+    real time during the ~10-15s of tool calls, instead of the whole
+    request finishing (tool calls AND the final answer, ~30-45s total)
+    before anything is sent and the client faking a replay of steps that
+    already happened. The final answer itself is still sent as one blob
+    once the model finishes composing it, not streamed token-by-token."""
     body = request.get_json(silent=True) or {}
     user_message = (body.get("message") or "").strip()
     if not user_message:
@@ -192,74 +204,79 @@ def chat():
 
     _chat_history.append({"role": "user", "content": user_message})
     client = get_anthropic_client()
-    graph_deltas = []
-    steps = []
 
-    try:
-        with db.get_session(get_driver()) as session:
-            for _ in range(MAX_TOOL_ITERATIONS):
-                response = client.messages.create(
-                    model=CHAT_MODEL,
-                    max_tokens=4096,
-                    system=chat_tools.SYSTEM_PROMPT,
-                    tools=chat_tools.TOOLS,
-                    messages=_chat_history,
-                )
-                _chat_history.append({"role": "assistant", "content": response.content})
-
-                if response.stop_reason != "tool_use":
-                    final_text = "".join(
-                        block.text for block in response.content if block.type == "text"
+    def generate():
+        graph_deltas = []
+        step_count = 0
+        try:
+            with db.get_session(get_driver()) as session:
+                for _ in range(MAX_TOOL_ITERATIONS):
+                    response = client.messages.create(
+                        model=CHAT_MODEL,
+                        max_tokens=4096,
+                        system=chat_tools.SYSTEM_PROMPT,
+                        tools=chat_tools.TOOLS,
+                        messages=_chat_history,
                     )
-                    if not final_text.strip():
-                        block_types = [block.type for block in response.content]
-                        logger.warning(
-                            "Model returned no text content (stop_reason=%s, block_types=%s, steps=%d)",
-                            response.stop_reason, block_types, len(steps),
-                        )
-                        final_text = (
-                            "The assistant finished its analysis but didn't return a written "
-                            "summary this time -- the decision trace above shows every step it "
-                            "completed. Try asking again."
-                        )
-                    return jsonify({
-                        "status": "ok",
-                        "reply": final_text,
-                        "graph": chat_tools.merge_graph_deltas(graph_deltas),
-                        "steps": steps,
-                    })
+                    _chat_history.append({"role": "assistant", "content": response.content})
 
-                tool_results = []
-                for block in response.content:
-                    if block.type != "tool_use":
-                        continue
-                    result = chat_tools.run_tool(block.name, block.input, session)
-                    graph_delta = result.pop("graph", None)
-                    if graph_delta:
-                        graph_deltas.append(graph_delta)
-                    steps.append({
-                        "tool": block.name,
-                        "label": chat_tools.describe_tool_call(block.name, block.input),
-                        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
-                        # This step's own delta, so the client can reveal it on
-                        # canvas in sync with narrating this step live, instead
-                        # of the whole graph appearing at once at the end.
-                        "graph": graph_delta or {"nodes": [], "edges": []},
-                    })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result),
-                    })
-                _chat_history.append({"role": "user", "content": tool_results})
+                    if response.stop_reason != "tool_use":
+                        final_text = "".join(
+                            block.text for block in response.content if block.type == "text"
+                        )
+                        if not final_text.strip():
+                            block_types = [block.type for block in response.content]
+                            logger.warning(
+                                "Model returned no text content (stop_reason=%s, block_types=%s, steps=%d)",
+                                response.stop_reason, block_types, step_count,
+                            )
+                            final_text = (
+                                "The assistant finished its analysis but didn't return a written "
+                                "summary this time -- the decision trace above shows every step it "
+                                "completed. Try asking again."
+                            )
+                        yield _sse_event({
+                            "type": "done",
+                            "reply": final_text,
+                            "graph": chat_tools.merge_graph_deltas(graph_deltas),
+                        })
+                        return
 
-        return jsonify({"error": "The assistant took too many steps to answer."}), 500
-    except anthropic.APIError:
-        logger.exception("Anthropic API error")
-        return jsonify({"error": "The assistant is unavailable right now."}), 502
-    except Exception:
-        logger.exception("Chat request failed")
-        return jsonify({"error": "Something went wrong talking to the assistant."}), 500
+                    tool_results = []
+                    for block in response.content:
+                        if block.type != "tool_use":
+                            continue
+                        result = chat_tools.run_tool(block.name, block.input, session)
+                        graph_delta = result.pop("graph", None)
+                        if graph_delta:
+                            graph_deltas.append(graph_delta)
+                        step_count += 1
+                        # Sent the instant this tool call actually finishes,
+                        # not batched up for later -- this is the real-time
+                        # progress the client renders live.
+                        yield _sse_event({
+                            "type": "step",
+                            "tool": block.name,
+                            "label": chat_tools.describe_tool_call(block.name, block.input),
+                            "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "graph": graph_delta or {"nodes": [], "edges": []},
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result),
+                        })
+                    _chat_history.append({"role": "user", "content": tool_results})
+
+            yield _sse_event({"type": "error", "error": "The assistant took too many steps to answer."})
+        except anthropic.APIError:
+            logger.exception("Anthropic API error")
+            yield _sse_event({"type": "error", "error": "The assistant is unavailable right now."})
+        except Exception:
+            logger.exception("Chat request failed")
+            yield _sse_event({"type": "error", "error": "Something went wrong talking to the assistant."})
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
 
 if __name__ == "__main__":
