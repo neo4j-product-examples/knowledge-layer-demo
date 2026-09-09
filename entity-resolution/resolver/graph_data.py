@@ -49,8 +49,8 @@ WHERE a.sourceId IN $ids AND b.sourceId IN $ids
 RETURN a.sourceId AS fromId, b.sourceId AS toId
 """
 
-_GROUP_COLORS = {"meridian": "#4C8BF5", "documents": "#F59E4C"}
-_RISK_COLOR = "#E5484D"
+_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847"}
+_RISK_COLOR = "#D6483F"
 
 
 def _node_id(source_graph, source_id):

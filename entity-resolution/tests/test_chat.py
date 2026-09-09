@@ -103,6 +103,24 @@ def test_run_find_parent_companies_flags_delinquent_related_company(monkeypatch,
     assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
 
 
+def test_describe_tool_call_includes_customer_id_when_present():
+    label = chat.describe_tool_call("get_customer_credit_score", {"customer_id": "C001"})
+
+    assert label == "Pulling credit score from virtual graph (C001)"
+
+
+def test_describe_tool_call_handles_no_customer_id():
+    label = chat.describe_tool_call("find_customer", {})
+
+    assert label == "Matching business plan entities to Meridian customers"
+
+
+def test_describe_tool_call_falls_back_for_unknown_tool():
+    label = chat.describe_tool_call("some_new_tool", {})
+
+    assert label == "Running some_new_tool"
+
+
 def test_run_get_customer_credit_score_returns_latest_and_history(monkeypatch, fake_session):
     monkeypatch.setattr(
         matching, "fetch_meridian_customer_credit_scores",

@@ -186,6 +186,25 @@ def run_find_parent_companies(session, customer_id):
     }
 
 
+TOOL_STEP_LABELS = {
+    "find_customer": "Matching business plan entities to Meridian customers",
+    "find_parent_companies": "Walking corporate ownership hierarchy",
+    "get_customer_risk_profile": "Pulling KYC and risk profile from virtual graph",
+    "get_customer_credit_score": "Pulling credit score from virtual graph",
+    "get_customer_loan_applications": "Pulling loan applications from virtual graph",
+    "get_customer_transaction_summary": "Pulling transactions from virtual graph",
+}
+
+
+def describe_tool_call(name, tool_input):
+    """Human-readable label for one tool call, used both for the live
+    "thinking" status and for its entry in the decision trail -- this is
+    the traceability layer: every step the agent took, in plain language."""
+    label = TOOL_STEP_LABELS.get(name, f"Running {name}")
+    customer_id = (tool_input or {}).get("customer_id")
+    return f"{label} ({customer_id})" if customer_id else label
+
+
 def run_get_customer_risk_profile(session, customer_id):
     kyc_rows = matching.fetch_meridian_customer_kyc(session)
     facility_rows = matching.fetch_meridian_customer_facilities(session)

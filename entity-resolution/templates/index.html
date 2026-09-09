@@ -2,66 +2,154 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Entity Resolution — Meridian &amp; Documents</title>
+  <title>Meridian Lending Intelligence</title>
   <style>
+    :root {
+      --cream: #F7F0E4;
+      --cream-blob: #F0DBBE;
+      --panel: #FFFFFF;
+      --border: #E5D9C3;
+      --navy: #1A2B3C;
+      --slate: #4A5568;
+      --muted: #948A72;
+      --brand-navy: #2B5876;
+      --brand-navy-dark: #1F4459;
+      --brand-teal: #4FA9B8;
+      --link-teal: #256B7A;
+      --accent-orange: #D98847;
+      --accent-red: #D6483F;
+      --shadow: 0 2px 10px rgba(26, 43, 60, 0.07);
+    }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
       font-family: -apple-system, sans-serif;
-      background: #ffffff;
-      color: #111;
+      background: var(--cream);
+      color: var(--navy);
     }
     #error-banner { background: #fdecea; color: #9c1f18; padding: 10px 24px; display: none; }
 
-    /* ---------- Landing (clean, white) ---------- */
+    /* ---------- Landing (white card floating on cream) ---------- */
     #landing {
       height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 20px;
-      text-align: center;
+      position: relative;
+      overflow: hidden;
+      background: var(--cream);
     }
-    #landing h1 { font-size: 22px; font-weight: 600; margin: 0; color: #111; }
-    #landing p { font-size: 14px; color: #666; margin: 0; max-width: 420px; }
+    .landing-blob {
+      position: absolute;
+      width: 560px; height: 560px;
+      background: var(--cream-blob);
+      border-radius: 50%;
+      top: -180px; right: -200px;
+    }
+    .landing-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      text-align: center;
+      background: var(--panel);
+      border-radius: 18px;
+      box-shadow: 0 16px 48px rgba(26, 43, 60, 0.1);
+      padding: 52px 60px;
+      max-width: 460px;
+    }
+    #landing h1 { font-size: 24px; font-weight: 700; margin: 0; color: var(--navy); }
+    #landing p { font-size: 14px; color: var(--slate); margin: 0; max-width: 360px; line-height: 1.5; }
     #upload-btn {
       padding: 12px 28px;
       font-size: 15px;
       font-weight: 600;
       cursor: pointer;
       border: none;
-      border-radius: 6px;
-      background: #4C8BF5;
+      border-radius: 8px;
+      background: var(--brand-navy);
       color: white;
     }
-    #upload-btn:hover { background: #3a76e0; }
-    #upload-btn:disabled { background: #a9c4ee; cursor: default; }
+    #upload-btn:hover { background: var(--brand-navy-dark); }
+    #upload-btn:disabled { background: #b9c9d2; cursor: default; }
 
-    /* ---------- Workspace (chat left / graph right) ---------- */
+    /* ---------- Workspace (topbar / chat+graph row / decision trail) ---------- */
     #workspace {
       display: none;
       height: 100vh;
-      background: #0b0c10;
-      color: #eee;
+      background: var(--cream);
+      color: var(--navy);
+      flex-direction: column;
+      padding: 16px;
+      gap: 12px;
     }
     body.workspace #landing { display: none; }
     body.workspace #workspace { display: flex; }
+
+    #topbar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 24px;
+      background: var(--panel);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+    #topbar-brand { display: flex; align-items: center; gap: 10px; }
+    #topbar-mark {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--brand-navy), var(--brand-teal));
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-size: 13px; font-weight: 700; flex-shrink: 0;
+    }
+    #topbar-title { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; color: var(--navy); }
+    #topbar-subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    #topbar-case { font-size: 12px; color: var(--slate); text-align: right; }
+    #topbar-case strong { color: var(--navy); }
+
+    #main-row {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      background: var(--panel);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .resize-handle-x {
+      width: 10px; flex-shrink: 0; cursor: col-resize;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--cream);
+    }
+    .resize-handle-x::after { content: ''; width: 4px; height: 48px; border-radius: 2px; background: var(--border); }
+    .resize-handle-x:hover::after, .resize-handle-x.active::after { background: var(--brand-teal); }
+
+    .resize-handle-y {
+      height: 12px; flex-shrink: 0; cursor: row-resize;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .resize-handle-y::after { content: ''; width: 48px; height: 4px; border-radius: 2px; background: var(--border); }
+    .resize-handle-y:hover::after, .resize-handle-y.active::after { background: var(--brand-teal); }
+
+    body.resizing-x, body.resizing-x * { cursor: col-resize !important; user-select: none !important; }
+    body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select: none !important; }
 
     #chat-pane {
       width: 380px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
-      background: #14161c;
-      border-right: 1px solid #2a2c33;
     }
     #chat-header {
       padding: 16px 20px;
-      border-bottom: 1px solid #2a2c33;
+      border-bottom: 1px solid var(--border);
     }
-    #chat-header h2 { font-size: 15px; margin: 0; font-weight: 600; }
-    #chat-header p { font-size: 12px; color: #aaa; margin: 4px 0 0; }
+    #chat-header h2 { font-size: 15px; margin: 0; font-weight: 700; color: var(--navy); }
+    #chat-header p { font-size: 12px; color: var(--slate); margin: 4px 0 0; }
     #chat-messages {
       flex: 1;
       overflow-y: auto;
@@ -71,19 +159,19 @@
       gap: 10px;
     }
     .msg { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; }
-    .msg.user { align-self: flex-end; background: #4C8BF5; color: white; }
-    .msg.assistant { align-self: flex-start; background: #2a2c33; color: #eee; }
-    .msg.thinking { color: #999; font-style: italic; }
+    .msg.user { align-self: flex-end; background: var(--brand-navy); color: white; }
+    .msg.assistant { align-self: flex-start; background: var(--panel); color: var(--navy); border: 1px solid var(--border); }
+    .msg.thinking { color: var(--muted); font-style: italic; }
     .msg.assistant p { margin: 0 0 8px; }
     .msg.assistant p:last-child { margin-bottom: 0; }
     .msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
-    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { font-size: 13px; margin: 0 0 6px; }
-    .msg.assistant code { background: #14161c; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
-    .msg.assistant pre { background: #14161c; padding: 8px; border-radius: 6px; overflow-x: auto; }
+    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { font-size: 13px; margin: 0 0 6px; color: var(--navy); }
+    .msg.assistant code { background: var(--cream); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+    .msg.assistant pre { background: var(--cream); padding: 8px; border-radius: 6px; overflow-x: auto; }
     .msg.assistant pre code { background: none; padding: 0; }
     .msg.assistant table { border-collapse: collapse; width: 100%; margin: 0 0 8px; font-size: 12px; }
-    .msg.assistant th, .msg.assistant td { border: 1px solid #3a3c45; padding: 4px 6px; text-align: left; }
-    .msg.assistant a { color: #9db4e8; }
+    .msg.assistant th, .msg.assistant td { border: 1px solid var(--border); padding: 4px 6px; text-align: left; }
+    .msg.assistant a { color: var(--link-teal); }
     .suggestion {
       align-self: flex-start;
       font-size: 12px;
@@ -91,24 +179,24 @@
       cursor: pointer;
     }
     .suggestion:hover .suggestion-text { text-decoration: underline; }
-    .suggestion-label { color: #888; }
-    .suggestion-text { color: #9db4e8; font-weight: 600; }
+    .suggestion-label { color: var(--muted); }
+    .suggestion-text { color: var(--link-teal); font-weight: 600; }
     #chat-input-row {
       display: flex;
       gap: 8px;
       padding: 14px 16px;
-      border-top: 1px solid #2a2c33;
+      border-top: 1px solid var(--border);
     }
     #chat-input {
       flex: 1;
       padding: 8px 10px;
       font-size: 13px;
       border-radius: 6px;
-      border: 1px solid #2a2c33;
-      background: #0b0c10;
-      color: #eee;
+      border: 1px solid var(--border);
+      background: var(--cream);
+      color: var(--navy);
     }
-    #chat-input:disabled { color: #666; }
+    #chat-input:disabled { color: var(--muted); }
     #chat-send {
       padding: 8px 14px;
       font-size: 13px;
@@ -116,46 +204,119 @@
       cursor: pointer;
       border: none;
       border-radius: 6px;
-      background: #4C8BF5;
+      background: var(--brand-navy);
       color: white;
     }
-    #chat-send:hover { background: #3a76e0; }
+    #chat-send:hover { background: var(--brand-navy-dark); }
 
     #graph-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .legend { padding: 12px 24px; font-size: 14px; color: #aaa; background: #14161c; border-top: 1px solid #2a2c33; }
+    .legend { padding: 12px 24px; font-size: 14px; color: var(--slate); background: var(--panel); border-top: 1px solid var(--border); }
     .legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 20px; }
     .dot { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
-    #graph { flex: 1; background: #0b0c10; }
+    #graph { flex: 1; background: var(--panel); }
+
+    /* ---------- Decision trail (audit log, pinned to the bottom) ---------- */
+    #decision-trail {
+      flex-shrink: 0;
+      height: 150px;
+      background: var(--panel);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #decision-trail-header {
+      padding: 10px 24px 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    #decision-trail-empty { padding: 0 24px; font-size: 12px; color: var(--muted); }
+    #decision-trail-entries {
+      flex: 1;
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      padding: 0 24px 14px;
+      overflow-x: auto;
+    }
+    .trail-step {
+      flex-shrink: 0;
+      width: 210px;
+      background: var(--cream);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      position: relative;
+    }
+    .trail-step-number {
+      position: absolute; top: -8px; left: -8px;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--brand-navy); color: white; font-size: 10px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .trail-step-label { color: var(--navy); font-weight: 600; line-height: 1.3; }
+    .trail-step-time { color: var(--muted); font-size: 10px; }
   </style>
 </head>
 <body>
   <div id="error-banner">{{ error or "" }}</div>
 
   <div id="landing">
-    <h1>Entity Resolution — Meridian ↔ Documents</h1>
-    <p>Upload a business plan to extract its entities and start resolving them against Meridian Bank's customer data.</p>
-    <button id="upload-btn">Upload Business Plan</button>
+    <div class="landing-blob"></div>
+    <div class="landing-card">
+      <h1>Meridian Lending Intelligence</h1>
+      <p>AI-assisted loan decisioning for Meridian Bank commercial lending. Upload a business plan to begin underwriting review.</p>
+      <button id="upload-btn">Upload Business Plan</button>
+    </div>
   </div>
 
   <div id="workspace">
-    <div id="chat-pane">
-      <div id="chat-header">
-        <h2>Entity Resolution Assistant</h2>
-        <p>Ask questions about the resolved graph</p>
+    <div id="topbar">
+      <div id="topbar-brand">
+        <div id="topbar-mark">M</div>
+        <div>
+          <div id="topbar-title">Meridian Lending Intelligence</div>
+          <div id="topbar-subtitle">Commercial Loan Decisioning</div>
+        </div>
       </div>
-      <div id="chat-messages"></div>
-      <div id="chat-input-row">
-        <input type="text" id="chat-input" placeholder="Ask a question…" disabled>
-        <button id="chat-send">Send</button>
+      <div id="topbar-case">Application <strong>#APP-3001</strong> — Rosa's Bakery</div>
+    </div>
+    <div id="main-row">
+      <div id="chat-pane">
+        <div id="chat-header">
+          <h2>Loan Decisioning Assistant</h2>
+          <p>Ask about a customer's credit, risk, and lending profile</p>
+        </div>
+        <div id="chat-messages"></div>
+        <div id="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Ask a question…" disabled>
+          <button id="chat-send">Send</button>
+        </div>
+      </div>
+      <div id="chat-resize-handle" class="resize-handle-x"></div>
+      <div id="graph-pane">
+        <div id="graph"></div>
+        <div class="legend">
+          <span><span class="dot" style="background:#2B5876"></span>Banking Virtual Graph</span>
+          <span><span class="dot" style="background:#D98847"></span>Business Plan Knowledge Graph</span>
+          <span><span class="dot" style="background:#D6483F"></span>Risk Flagged</span>
+        </div>
       </div>
     </div>
-    <div id="graph-pane">
-      <div id="graph"></div>
-      <div class="legend">
-        <span><span class="dot" style="background:#4C8BF5"></span>Banking Virtual Graph</span>
-        <span><span class="dot" style="background:#F59E4C"></span>Business Plan Knowledge Graph</span>
-        <span><span class="dot" style="background:#E5484D"></span>Risk Flagged</span>
-      </div>
+    <div id="trail-resize-handle" class="resize-handle-y"></div>
+    <div id="decision-trail">
+      <div id="decision-trail-header">Decision Trail</div>
+      <div id="decision-trail-empty">Every step the assistant takes will be logged here for audit.</div>
+      <div id="decision-trail-entries"></div>
     </div>
   </div>
 
@@ -189,6 +350,40 @@
     const chatMessages = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
     const chatSend = document.getElementById('chat-send');
+    const decisionTrailEntries = document.getElementById('decision-trail-entries');
+    const decisionTrailEmpty = document.getElementById('decision-trail-empty');
+    let trailStepCounter = 0;
+
+    function appendTrailSteps(steps) {
+      if (!steps || !steps.length) return;
+      decisionTrailEmpty.hidden = true;
+      for (const step of steps) {
+        trailStepCounter += 1;
+        const card = document.createElement('div');
+        card.className = 'trail-step';
+        card.innerHTML = `
+          <div class="trail-step-number">${trailStepCounter}</div>
+          <div class="trail-step-label"></div>
+          <div class="trail-step-time"></div>
+        `;
+        card.querySelector('.trail-step-label').textContent = step.label;
+        card.querySelector('.trail-step-time').textContent = step.timestamp;
+        decisionTrailEntries.appendChild(card);
+      }
+      decisionTrailEntries.scrollLeft = decisionTrailEntries.scrollWidth;
+    }
+
+    // Replays the real tool-call sequence just returned by the server as a
+    // sequence of "thinking" status updates, then a final synthetic step --
+    // the work already happened server-side, this just narrates it so the
+    // live status reads like the decision trail it's about to populate.
+    async function animateThinking(thinkingDiv, steps) {
+      const messages = [...(steps || []).map(s => s.label), 'Populating decision trail…'];
+      for (const message of messages) {
+        thinkingDiv.textContent = message;
+        await new Promise(resolve => setTimeout(resolve, 550));
+      }
+    }
 
     function attachInteractions(nvlInstance) {
       interactions.forEach(i => i.destroy?.());
@@ -284,14 +479,14 @@
         from: e.from,
         to: e.to,
         caption: e.label,
-        color: '#666',
+        color: '#9C8F73',
         width: 2,
       }));
 
       if (nvl) nvl.destroy();
       nvl = new NVL(graphContainer, nodes, relationships, {
         initialZoom: 1,
-        backgroundColor: '#0b0c10',
+        backgroundColor: '#FFFFFF',
       });
       attachInteractions(nvl);
 
@@ -372,7 +567,7 @@
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
         enableChat();
-        addSuggestion("Find the customer that matches Rosa's Bakery");
+        addSuggestion("Match Rosa's Bakery to an existing Meridian Bank customer");
       } catch (e) {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Business Plan';
@@ -394,16 +589,19 @@
           body: JSON.stringify({ message: text }),
         });
         const data = await res.json();
-        thinking.remove();
         if (data.error) {
+          thinking.remove();
           addMessage('assistant', data.error);
           return;
         }
+        await animateThinking(thinking, data.steps);
+        thinking.remove();
         addMessage('assistant', data.reply || '(no response)');
         if (data.graph && data.graph.nodes && data.graph.nodes.length) {
           mergeGraphData(data.graph);
           renderGraph();
         }
+        appendTrailSteps(data.steps);
       } catch (e) {
         thinking.remove();
         addMessage('assistant', 'Something went wrong talking to the assistant.');
@@ -416,6 +614,61 @@
     chatSend.addEventListener('click', handleSend);
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') handleSend();
+    });
+
+    // Resizable panes: chat-vs-graph width, and decision-trail height.
+    // Dragging just resizes the container via inline style; the graph
+    // canvas itself only picks up the new size on a full re-render (NVL
+    // sizes its canvas once at construction, not on container resize),
+    // so each drag ends with a renderGraph() call to refit it.
+    function setupDragResize({ handle, axis, getSize, setSize, min, max }) {
+      let dragging = false;
+      let startPos = 0;
+      let startSize = 0;
+      const bodyClass = axis === 'x' ? 'resizing-x' : 'resizing-y';
+
+      handle.addEventListener('mousedown', (e) => {
+        dragging = true;
+        startPos = axis === 'x' ? e.clientX : e.clientY;
+        startSize = getSize();
+        handle.classList.add('active');
+        document.body.classList.add(bodyClass);
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const pos = axis === 'x' ? e.clientX : e.clientY;
+        const delta = axis === 'x' ? pos - startPos : startPos - pos;
+        setSize(Math.min(max(), Math.max(min, startSize + delta)));
+      });
+      window.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('active');
+        document.body.classList.remove(bodyClass);
+        if (nvl) renderGraph();
+      });
+    }
+
+    const chatPaneEl = document.getElementById('chat-pane');
+    const decisionTrailEl = document.getElementById('decision-trail');
+
+    setupDragResize({
+      handle: document.getElementById('chat-resize-handle'),
+      axis: 'x',
+      getSize: () => chatPaneEl.getBoundingClientRect().width,
+      setSize: (w) => { chatPaneEl.style.width = `${w}px`; },
+      min: 280,
+      max: () => 640,
+    });
+
+    setupDragResize({
+      handle: document.getElementById('trail-resize-handle'),
+      axis: 'y',
+      getSize: () => decisionTrailEl.getBoundingClientRect().height,
+      setSize: (h) => { decisionTrailEl.style.height = `${h}px`; },
+      min: 90,
+      max: () => window.innerHeight * 0.5,
     });
   </script>
 </body>
