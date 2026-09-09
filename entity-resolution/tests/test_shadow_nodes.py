@@ -18,11 +18,11 @@ def test_seed_meridian_customers_merges_on_source_graph_and_id(fake_session):
 
     assert len(fake_session.calls) == 1
     query, params = fake_session.calls[0]
+    assert "UNWIND $rows AS row" in query
     assert "MERGE (n:Shadow:Customer" in query
     assert "USE meridianComposite.shadowDb" in query
     assert params["sourceGraph"] == "meridian"
-    assert params["sourceId"] == "C1"
-    assert params["properties"]["customerName"] == "Jane Doe"
+    assert params["rows"] == [{"sourceId": "C1", "properties": {"customerName": "Jane Doe", "customerType": "Individual"}}]
 
 
 def test_seed_meridian_customers_skips_missing_id(fake_session):
@@ -36,7 +36,7 @@ def test_seed_meridian_accounts_merges_shadow_account(fake_session):
     query, params = fake_session.calls[0]
     assert "MERGE (n:Shadow:Account" in query
     assert params["sourceGraph"] == "meridian"
-    assert params["sourceId"] == "A1"
+    assert params["rows"] == [{"sourceId": "A1", "properties": {}}]
 
 
 def test_create_document_shadow_node(fake_session):
@@ -103,13 +103,21 @@ def test_create_shadow_relationship_sets_given_properties(fake_session):
     assert params["properties"] == {"pct": 70, "role": "Founder & CEO"}
 
 
-def test_seed_meridian_account_ownership_creates_one_call_per_edge(fake_session):
+def test_seed_meridian_account_ownership_batches_all_edges_into_one_call(fake_session):
     edges = [{"customerId": "C1", "accountId": "A1"}, {"customerId": "C2", "accountId": "A2"}]
 
     shadow_nodes.seed_meridian_account_ownership(fake_session, edges)
 
-    assert len(fake_session.calls) == 2
-    assert "OWNS_ACCOUNT" in fake_session.calls[0][0]
+    assert len(fake_session.calls) == 1
+    query, params = fake_session.calls[0]
+    assert "UNWIND $rows AS row" in query
+    assert "OWNS_ACCOUNT" in query
+    assert len(params["rows"]) == 2
+    assert params["rows"][0] == {
+        "fromSourceGraph": "meridian", "fromSourceId": "C1",
+        "toSourceGraph": "meridian", "toSourceId": "A1",
+        "properties": {},
+    }
 
 
 def test_seed_meridian_account_ownership_skips_missing_ids(fake_session):
@@ -117,16 +125,17 @@ def test_seed_meridian_account_ownership_skips_missing_ids(fake_session):
     assert fake_session.calls == []
 
 
-def test_seed_meridian_customer_hierarchy_creates_one_call_per_edge(fake_session):
+def test_seed_meridian_customer_hierarchy_batches_all_edges_into_one_call(fake_session):
     edges = [{"customerId": "C001", "parentCustomerId": "C082"}, {"customerId": "C002", "parentCustomerId": "C083"}]
 
     shadow_nodes.seed_meridian_customer_hierarchy(fake_session, edges)
 
-    assert len(fake_session.calls) == 2
+    assert len(fake_session.calls) == 1
     query, params = fake_session.calls[0]
     assert "MERGE (a)-[r:HAS_PARENT]->(b)" in query
-    assert params["fromSourceId"] == "C001"
-    assert params["toSourceId"] == "C082"
+    assert len(params["rows"]) == 2
+    assert params["rows"][0]["fromSourceId"] == "C001"
+    assert params["rows"][0]["toSourceId"] == "C082"
 
 
 def test_seed_meridian_customer_hierarchy_skips_missing_ids(fake_session):
@@ -198,7 +207,7 @@ def test_seed_document_relationships_creates_ownership_edge_with_properties(fake
     assert len(fake_session.calls) == 1
     query, params = fake_session.calls[0]
     assert "MERGE (a)-[r:OWNS]->(b)" in query
-    assert params["properties"] == {"pct": 70, "role": "Founder & CEO"}
+    assert params["rows"][0]["properties"] == {"pct": 70, "role": "Founder & CEO"}
 
 
 def test_seed_document_relationships_skips_ownership_edges_with_missing_ids(fake_session):
@@ -212,7 +221,7 @@ def test_seed_document_relationships_skips_ownership_edges_with_missing_ids(fake
     assert fake_session.calls == []
 
 
-def test_apply_document_matches_creates_node_then_edge_per_match(fake_session):
+def test_apply_document_matches_creates_node_then_edge_batch(fake_session):
     matches = [{
         "meridian_id": "C1",
         "documents_id": "p1",
@@ -228,5 +237,6 @@ def test_apply_document_matches_creates_node_then_edge_per_match(fake_session):
     node_query, node_params = fake_session.calls[0]
     edge_query, edge_params = fake_session.calls[1]
     assert "MERGE (n:Shadow:Person" in node_query
-    assert node_params["properties"] == {"name": "Jane Doe"}
+    assert node_params["rows"][0]["properties"] == {"name": "Jane Doe"}
     assert "SIMILAR_TO" in edge_query
+    assert edge_params["rows"][0]["meridianId"] == "C1"

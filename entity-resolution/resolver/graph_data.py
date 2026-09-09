@@ -49,8 +49,8 @@ WHERE a.sourceId IN $ids AND b.sourceId IN $ids
 RETURN a.sourceId AS fromId, b.sourceId AS toId
 """
 
-_GROUP_COLORS = {"meridian": "#4C8BF5", "documents": "#F59E4C"}
-_RISK_COLOR = "#E5484D"
+_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847"}
+_RISK_COLOR = "#D6483F"
 
 
 def _node_id(source_graph, source_id):
@@ -148,6 +148,133 @@ def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
         for row in edge_rows
     ]
     return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def build_risk_profile_delta(customer_id, kyc, facilities):
+    """Graph delta revealing a customer's KYC status and loan facilities
+    (e.g. from get_customer_risk_profile). Assumes the Customer node itself
+    is already on the canvas from an earlier find_customer/find_parent_companies
+    call. Facilities in Delinquent status render in the risk color, same
+    threshold as build_hierarchy_delta."""
+    customer_node_id = _node_id("meridian", customer_id)
+    nodes = []
+    edges = []
+
+    if kyc:
+        kyc_node_id = _node_id("meridian", f"KYC-{customer_id}")
+        nodes.append({
+            "id": kyc_node_id,
+            "label": f"KYC: {kyc.get('riskRating') or 'Unknown'}",
+            "group": "meridian",
+            "color": _GROUP_COLORS["meridian"],
+            "componentId": None,
+        })
+        edges.append({
+            "from": customer_node_id,
+            "to": kyc_node_id,
+            "label": "HAS_KYC_STATUS",
+            "title": "HAS_KYC_STATUS",
+            "dashes": False,
+        })
+
+    for f in facilities:
+        facility_node_id = _node_id("meridian", f["facilityId"])
+        is_delinquent = f.get("paymentStatus") == "Delinquent"
+        nodes.append({
+            "id": facility_node_id,
+            "label": f"Loan Facility: {f['facilityId']} ({f.get('paymentStatus')})",
+            "group": "meridian",
+            "color": _RISK_COLOR if is_delinquent else _GROUP_COLORS["meridian"],
+            "componentId": None,
+        })
+        edges.append({
+            "from": customer_node_id,
+            "to": facility_node_id,
+            "label": "HAS_FACILITY",
+            "title": "HAS_FACILITY",
+            "dashes": False,
+        })
+
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_credit_score_delta(customer_id, latest_score):
+    """Graph delta revealing a customer's latest credit score (from
+    get_customer_credit_score). Assumes the Customer node is already on
+    the canvas."""
+    if not latest_score:
+        return {"nodes": [], "edges": []}
+
+    score_id = latest_score.get("scoreId") or f"CS-{customer_id}"
+    score_node_id = _node_id("meridian", score_id)
+    nodes = [{
+        "id": score_node_id,
+        "label": f"Credit Score: {latest_score.get('creditScore')} ({latest_score.get('scoreBand')})",
+        "group": "meridian",
+        "color": _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": score_node_id,
+        "label": "HAS_CREDIT_SCORE",
+        "title": "HAS_CREDIT_SCORE",
+        "dashes": False,
+    }]
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_loan_application_delta(customer_id, applications):
+    """Graph delta revealing a customer's loan applications (from
+    get_customer_loan_applications). Assumes the Customer node is already
+    on the canvas."""
+    customer_node_id = _node_id("meridian", customer_id)
+    nodes = []
+    edges = []
+    for application in applications:
+        app_node_id = _node_id("meridian", application["applicationId"])
+        nodes.append({
+            "id": app_node_id,
+            "label": f"Loan Application: {application['applicationId']} ({application.get('status')})",
+            "group": "meridian",
+            "color": _GROUP_COLORS["meridian"],
+            "componentId": None,
+        })
+        edges.append({
+            "from": customer_node_id,
+            "to": app_node_id,
+            "label": "APPLIED_FOR",
+            "title": "APPLIED_FOR",
+            "dashes": False,
+        })
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_transaction_summary_delta(customer_id, summary):
+    """Graph delta revealing one aggregate transaction-activity node for a
+    customer (get_customer_transaction_summary) -- individual transactions
+    (there can be hundreds) aren't represented as their own nodes, just this
+    one summary. Negative net cash flow renders in the risk color."""
+    if not summary or not summary.get("transactionCount"):
+        return {"nodes": [], "edges": []}
+
+    net = summary.get("netCashFlow") or 0
+    summary_node_id = _node_id("meridian", f"TXN-SUMMARY-{customer_id}")
+    nodes = [{
+        "id": summary_node_id,
+        "label": f"Transactions: {summary['transactionCount']} (net {'-' if net < 0 else '+'}${abs(net):,.2f})",
+        "group": "meridian",
+        "color": _RISK_COLOR if net < 0 else _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": summary_node_id,
+        "label": "HAS_TRANSACTION_SUMMARY",
+        "title": "HAS_TRANSACTION_SUMMARY",
+        "dashes": False,
+    }]
+    return {"nodes": nodes, "edges": edges}
 
 
 def fetch_graph_json(session):

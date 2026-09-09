@@ -13,6 +13,9 @@ def test_run_get_customer_risk_profile_returns_matching_kyc_and_facilities(fake_
     assert result["customerId"] == "C001"
     assert result["kyc"]["riskRating"] == "Low"
     assert len(result["facilities"]) == 1
+    assert result["graph"]["nodes"][0]["id"] == "meridian:KYC-C001"
+    assert result["graph"]["nodes"][1]["id"] == "meridian:TL-1001"
+    assert result["graph"]["nodes"][1]["color"] != graph_data._RISK_COLOR
 
 
 def test_run_get_customer_risk_profile_handles_customer_with_no_data(fake_session):
@@ -23,6 +26,19 @@ def test_run_get_customer_risk_profile_handles_customer_with_no_data(fake_sessio
 
     assert result["kyc"] is None
     assert result["facilities"] == []
+    assert result["graph"] == {"nodes": [], "edges": []}
+
+
+def test_run_get_customer_risk_profile_flags_delinquent_facility(fake_session):
+    fake_session.when("HAS_KYC_STATUS", [])
+    fake_session.when(
+        "HAS_FACILITY",
+        [{"customerId": "C002", "facilityId": "LOC-2002", "paymentStatus": "Delinquent", "daysPastDue": 62}],
+    )
+
+    result = chat.run_get_customer_risk_profile(fake_session, "C002")
+
+    assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
 
 
 def test_run_find_customer_builds_matches_payload_and_applies_matches(monkeypatch, fake_session):
@@ -85,6 +101,139 @@ def test_run_find_parent_companies_flags_delinquent_related_company(monkeypatch,
     assert result["relatedCompanies"] == [{"customerId": "C002", "customerName": "Alvarez Distribution Co"}]
     assert result["delinquentFacilities"][0]["facilityId"] == "LOC-2002"
     assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
+
+
+def test_describe_tool_call_includes_customer_id_when_present():
+    label = chat.describe_tool_call("get_customer_credit_score", {"customer_id": "C001"})
+
+    assert label == "Pulling credit score from virtual graph (C001)"
+
+
+def test_describe_tool_call_handles_no_customer_id():
+    label = chat.describe_tool_call("find_customer", {})
+
+    assert label == "Matching business plan entities to Meridian customers"
+
+
+def test_describe_tool_call_falls_back_for_unknown_tool():
+    label = chat.describe_tool_call("some_new_tool", {})
+
+    assert label == "Running some_new_tool"
+
+
+def test_run_get_customer_credit_score_returns_latest_and_history(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_credit_scores",
+        lambda s: [
+            {"customerId": "C001", "creditScore": 687, "scoreBand": "Good", "scoreDate": "2024-01-01"},
+            {"customerId": "C001", "creditScore": 721, "scoreBand": "Good", "scoreDate": "2024-06-01"},
+            {"customerId": "C002", "creditScore": 550, "scoreBand": "Fair", "scoreDate": "2024-06-01"},
+        ],
+    )
+
+    result = chat.run_get_customer_credit_score(fake_session, "C001")
+
+    assert result["latestScore"]["creditScore"] == 721
+    assert len(result["scoreHistory"]) == 2
+    assert result["graph"]["nodes"][0]["label"] == "Credit Score: 721 (Good)"
+    assert result["graph"]["edges"][0] == {
+        "from": "meridian:C001", "to": result["graph"]["nodes"][0]["id"],
+        "label": "HAS_CREDIT_SCORE", "title": "HAS_CREDIT_SCORE", "dashes": False,
+    }
+
+
+def test_run_get_customer_credit_score_handles_no_history(monkeypatch, fake_session):
+    monkeypatch.setattr(matching, "fetch_meridian_customer_credit_scores", lambda s: [])
+
+    result = chat.run_get_customer_credit_score(fake_session, "C999")
+
+    assert result["latestScore"] is None
+    assert result["scoreHistory"] == []
+    assert result["graph"] == {"nodes": [], "edges": []}
+
+
+def test_run_get_customer_loan_applications_filters_by_customer(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_loan_applications",
+        lambda s: [
+            {"customerId": "C001", "applicationId": "APP-3001", "status": "Under Review", "applicationDate": "2024-01-01"},
+            {"customerId": "C002", "applicationId": "APP-3002", "status": "Approved", "applicationDate": "2024-01-01"},
+        ],
+    )
+
+    result = chat.run_get_customer_loan_applications(fake_session, "C001")
+
+    assert result["applications"] == [
+        {"customerId": "C001", "applicationId": "APP-3001", "status": "Under Review", "applicationDate": "2024-01-01"}
+    ]
+    assert result["graph"]["nodes"] == [{
+        "id": "meridian:APP-3001", "label": "Loan Application: APP-3001 (Under Review)",
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+    }]
+    assert result["graph"]["edges"] == [{
+        "from": "meridian:C001", "to": "meridian:APP-3001",
+        "label": "APPLIED_FOR", "title": "APPLIED_FOR", "dashes": False,
+    }]
+
+
+def test_run_get_customer_transaction_summary_computes_cash_flow(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_transactions",
+        lambda s: [
+            {"customerId": "C001", "transactionId": "T1", "transactionType": "Deposit", "amount": 500.0, "transactionDate": "2024-01-01"},
+            {"customerId": "C001", "transactionId": "T2", "transactionType": "Withdrawal", "amount": -200.0, "transactionDate": "2024-02-01"},
+            {"customerId": "C002", "transactionId": "T3", "transactionType": "Deposit", "amount": 1000.0, "transactionDate": "2024-01-01"},
+        ],
+    )
+
+    result = chat.run_get_customer_transaction_summary(fake_session, "C001")
+
+    assert result["transactionCount"] == 2
+    assert result["totalInflow"] == 500.0
+    assert result["totalOutflow"] == 200.0
+    assert result["netCashFlow"] == 300.0
+    assert result["transactionTypeBreakdown"] == {"Deposit": 1, "Withdrawal": 1}
+    assert result["earliestDate"] == "2024-01-01"
+    assert result["latestDate"] == "2024-02-01"
+    assert result["graph"]["nodes"][0]["color"] == graph_data._GROUP_COLORS["meridian"]
+    assert result["graph"]["edges"][0]["from"] == "meridian:C001"
+
+
+def test_run_get_customer_transaction_summary_flags_negative_cash_flow(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_transactions",
+        lambda s: [
+            {"customerId": "C002", "transactionId": "T1", "transactionType": "Withdrawal", "amount": -500.0, "transactionDate": "2024-01-01"},
+        ],
+    )
+
+    result = chat.run_get_customer_transaction_summary(fake_session, "C002")
+
+    assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
+
+
+def test_run_tool_dispatches_get_customer_credit_score(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_customer_credit_score", lambda session, customer_id: {"customerId": customer_id})
+
+    result = chat.run_tool("get_customer_credit_score", {"customer_id": "C001"}, fake_session)
+
+    assert result == {"customerId": "C001"}
+
+
+def test_run_tool_dispatches_get_customer_loan_applications(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_customer_loan_applications", lambda session, customer_id: {"customerId": customer_id})
+
+    result = chat.run_tool("get_customer_loan_applications", {"customer_id": "C001"}, fake_session)
+
+    assert result == {"customerId": "C001"}
+
+
+def test_run_tool_dispatches_get_customer_transaction_summary(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_customer_transaction_summary", lambda session, customer_id: {"customerId": customer_id})
+
+    result = chat.run_tool("get_customer_transaction_summary", {"customer_id": "C001"}, fake_session)
+
+    assert result == {"customerId": "C001"}
 
 
 def test_run_tool_dispatches_find_customer(monkeypatch, fake_session):

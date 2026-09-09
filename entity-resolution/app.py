@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import os
@@ -189,6 +190,7 @@ def chat():
     _chat_history.append({"role": "user", "content": user_message})
     client = get_anthropic_client()
     graph_deltas = []
+    steps = []
 
     try:
         with db.get_session(get_driver()) as session:
@@ -210,6 +212,7 @@ def chat():
                         "status": "ok",
                         "reply": final_text,
                         "graph": chat_tools.merge_graph_deltas(graph_deltas),
+                        "steps": steps,
                     })
 
                 tool_results = []
@@ -220,6 +223,11 @@ def chat():
                     graph_delta = result.pop("graph", None)
                     if graph_delta:
                         graph_deltas.append(graph_delta)
+                    steps.append({
+                        "tool": block.name,
+                        "label": chat_tools.describe_tool_call(block.name, block.input),
+                        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                    })
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
