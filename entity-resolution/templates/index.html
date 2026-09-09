@@ -377,12 +377,25 @@
     // sequence of "thinking" status updates, then a final synthetic step --
     // the work already happened server-side, this just narrates it so the
     // live status reads like the decision trace it's about to populate.
-    async function animateThinking(thinkingDiv, steps) {
-      const messages = [...(steps || []).map(s => s.label), 'Populating decision trace…'];
-      for (const message of messages) {
-        thinkingDiv.textContent = message;
+    // Replays the real tool-call sequence just returned by the server: each
+    // step's own delta gets merged and rendered as its label is narrated in
+    // the "thinking" bubble, so bubbles appear on the graph one at a time as
+    // the agent's reasoning is read out, instead of the full graph
+    // materializing all at once after the whole answer is ready. The work
+    // already happened server-side -- this is a narration of it, not the
+    // work itself.
+    async function narrateSteps(thinkingDiv, steps) {
+      for (const step of (steps || [])) {
+        thinkingDiv.textContent = step.label;
+        if (step.graph && ((step.graph.nodes || []).length || (step.graph.edges || []).length)) {
+          mergeGraphData(step.graph);
+          renderGraph();
+        }
+        appendTraceSteps([step]);
         await new Promise(resolve => setTimeout(resolve, 550));
       }
+      thinkingDiv.textContent = 'Populating decision trace…';
+      await new Promise(resolve => setTimeout(resolve, 550));
     }
 
     function attachInteractions(nvlInstance) {
@@ -410,12 +423,35 @@
     // given, including all stacked at (0,0) if no x/y is provided) -- so we
     // compute a simple force-directed layout ourselves and pass NVL the
     // final positions, which it does render faithfully.
+    //
+    // NVL itself still gets destroyed and rebuilt on every render (its own
+    // addAndUpdateElementsInGraph doesn't reliably apply a new node's color
+    // -- see the comment on renderGraph), but positions persist here across
+    // calls and existing nodes are never moved once placed, so rebuilding
+    // reads as "a node was added" rather than the whole graph reshuffling.
+    const nodePositions = new Map();
+
     function layoutNodes(nodes, edges) {
-      const positions = new Map();
-      nodes.forEach((node, i) => {
-        const angle = (2 * Math.PI * i) / nodes.length;
-        positions.set(node.id, { x: 200 * Math.cos(angle), y: 200 * Math.sin(angle) });
-      });
+      const newNodeIds = new Set();
+      for (const node of nodes) {
+        if (nodePositions.has(node.id)) continue;
+        newNodeIds.add(node.id);
+        const neighborPositions = edges
+          .filter(e => e.from === node.id || e.to === node.id)
+          .map(e => nodePositions.get(e.from === node.id ? e.to : e.from))
+          .filter(Boolean);
+        if (neighborPositions.length) {
+          const avg = neighborPositions.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+          nodePositions.set(node.id, {
+            x: avg.x / neighborPositions.length + (Math.random() * 60 - 30),
+            y: avg.y / neighborPositions.length + (Math.random() * 60 - 30),
+          });
+        } else {
+          nodePositions.set(node.id, { x: Math.random() * 100 - 50, y: Math.random() * 100 - 50 });
+        }
+      }
+      if (!newNodeIds.size) return nodePositions;
+
       const velocities = new Map(nodes.map(n => [n.id, { vx: 0, vy: 0 }]));
 
       const REPULSION = 12000;
@@ -426,8 +462,8 @@
       for (let iter = 0; iter < 300; iter++) {
         for (let i = 0; i < nodes.length; i++) {
           for (let j = i + 1; j < nodes.length; j++) {
-            const a = positions.get(nodes[i].id);
-            const b = positions.get(nodes[j].id);
+            const a = nodePositions.get(nodes[i].id);
+            const b = nodePositions.get(nodes[j].id);
             const dx = a.x - b.x, dy = a.y - b.y;
             const distSq = Math.max(dx * dx + dy * dy, 0.01);
             const dist = Math.sqrt(distSq);
@@ -439,7 +475,7 @@
           }
         }
         for (const e of edges) {
-          const a = positions.get(e.from), b = positions.get(e.to);
+          const a = nodePositions.get(e.from), b = nodePositions.get(e.to);
           if (!a || !b) continue;
           const dx = b.x - a.x, dy = b.y - a.y;
           const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.01);
@@ -450,52 +486,119 @@
           vb.vx -= fx; vb.vy -= fy;
         }
         for (const node of nodes) {
-          const pos = positions.get(node.id);
+          if (!newNodeIds.has(node.id)) continue; // existing nodes stay put
+          const pos = nodePositions.get(node.id);
           const vel = velocities.get(node.id);
           vel.vx *= DAMPING; vel.vy *= DAMPING;
           pos.x += vel.vx * 0.05;
           pos.y += vel.vy * 0.05;
         }
       }
-      return positions;
+      return nodePositions;
     }
 
-    function renderGraph() {
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    // Edge ids/keys that have already been added to the live NVL instance --
+    // distinct from graphEdgesByKey, which tracks the app's full accumulated
+    // state. Lets us diff "what's new this call" without re-adding an edge
+    // NVL already has.
+    const addedEdgeKeys = new Set();
+
+    // renderGraph is async (the fly-out plays out over several frames) and
+    // callers fire it without awaiting it, so an overlapping call could
+    // still be mid-animation when a newer one starts. Since we no longer
+    // destroy/rebuild NVL (see below), overlapping calls animate disjoint
+    // sets of new nodes and don't actually conflict -- this guard just stops
+    // a stale call from doing a redundant final fit() after a newer one.
+    let renderGeneration = 0;
+
+    async function renderGraph() {
+      const myGeneration = ++renderGeneration;
       const nodeList = Array.from(graphNodesById.values());
       const nodeIds = new Set(nodeList.map(n => n.id));
       // A tool's delta can reveal a node's sub-entities (e.g. a customer's
       // KYC/credit score) before the customer itself is on the canvas --
       // NVL throws on a relationship whose endpoint isn't a known node id,
       // so drop any edge that would dangle instead of crashing the render.
-      const edgeList = Array.from(graphEdgesByKey.values()).filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
-      const positions = layoutNodes(nodeList, edgeList);
+      const edgeEntries = Array.from(graphEdgesByKey.entries()).filter(([, e]) => nodeIds.has(e.from) && nodeIds.has(e.to));
 
-      const nodes = nodeList.map(n => {
-        const pos = positions.get(n.id);
-        return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+      // Like Bloom's "expand" animation: a new node flies out from the
+      // already-placed neighbor it's connected to, gliding to its resting
+      // spot rather than just appearing there. Capture that start point
+      // before layoutNodes assigns the new node its permanent position.
+      const newNodeIds = new Set(nodeList.filter(n => !nodePositions.has(n.id)).map(n => n.id));
+      const flyInStarts = new Map();
+      for (const id of newNodeIds) {
+        const neighborEntry = edgeEntries.find(([, e]) =>
+          (e.from === id && nodePositions.has(e.to)) ||
+          (e.to === id && nodePositions.has(e.from))
+        );
+        const start = neighborEntry
+          ? nodePositions.get(neighborEntry[1].from === id ? neighborEntry[1].to : neighborEntry[1].from)
+          : { x: 0, y: 0 };
+        flyInStarts.set(id, { x: start.x, y: start.y });
+      }
+
+      const targetPositions = layoutNodes(nodeList, edgeEntries.map(([, e]) => e));
+
+      if (!nvl) {
+        // First-ever build: construct directly at resting positions, no
+        // animation (there's nothing on screen yet to fly out from).
+        const nodes = nodeList.map(n => {
+          const pos = targetPositions.get(n.id);
+          return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+        });
+        const relationships = edgeEntries.map(([key, e]) => {
+          addedEdgeKeys.add(key);
+          return { id: key, from: e.from, to: e.to, caption: e.label, color: '#9C8F73', width: 2 };
+        });
+        nvl = new NVL(graphContainer, nodes, relationships, { initialZoom: 1, backgroundColor: '#FFFFFF' });
+        attachInteractions(nvl);
+        // NVL's first paint doesn't reliably apply the x/y a node is
+        // constructed with -- nodes render stacked until something (e.g. a
+        // drag) forces a position update. setNodePositions is the same call
+        // a drag interaction uses internally, so calling it here forces
+        // that redraw immediately.
+        nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+        requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+        return;
+      }
+
+      const newEdgePayload = edgeEntries
+        .filter(([key]) => !addedEdgeKeys.has(key))
+        .map(([key, e]) => {
+          addedEdgeKeys.add(key);
+          return { id: key, from: e.from, to: e.to, caption: e.label, color: '#9C8F73', width: 2 };
+        });
+      const newNodePayload = Array.from(newNodeIds, id => {
+        const node = graphNodesById.get(id);
+        const start = flyInStarts.get(id);
+        return { id, caption: node.label, color: node.color, size: 20, x: start.x, y: start.y };
       });
-      const relationships = edgeList.map((e, i) => ({
-        id: `rel-${i}`,
-        from: e.from,
-        to: e.to,
-        caption: e.label,
-        color: '#9C8F73',
-        width: 2,
-      }));
+      if (newNodePayload.length || newEdgePayload.length) {
+        // Add new elements onto the SAME live instance instead of
+        // destroying and rebuilding NVL -- setNodePositions on an existing
+        // instance costs well under 1ms per call (measured), versus a full
+        // rebuild's real WebGL teardown/recreate cost, which is what made
+        // the previous destroy-per-frame animation look choppy.
+        nvl.addAndUpdateElementsInGraph(newNodePayload, newEdgePayload);
+      }
 
-      if (nvl) nvl.destroy();
-      nvl = new NVL(graphContainer, nodes, relationships, {
-        initialZoom: 1,
-        backgroundColor: '#FFFFFF',
-      });
-      attachInteractions(nvl);
-
-      // NVL's first paint doesn't reliably apply the x/y a node is
-      // constructed with -- nodes render stacked until something (e.g. a
-      // drag) forces a position update. setNodePositions is the same call
-      // a drag interaction uses internally, so calling it here with the
-      // very positions we just passed in forces that redraw immediately.
-      nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+      const FRAMES = newNodeIds.size ? 12 : 1;
+      for (let frame = 1; frame <= FRAMES; frame++) {
+        const t = easeOutCubic(frame / FRAMES);
+        const positions = Array.from(newNodeIds, id => {
+          const target = targetPositions.get(id);
+          const start = flyInStarts.get(id);
+          return { id, x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t };
+        });
+        if (positions.length) nvl.setNodePositions(positions);
+        if (frame < FRAMES) await new Promise(resolve => setTimeout(resolve, 35));
+      }
+      if (myGeneration !== renderGeneration) return;
       requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
     }
 
@@ -567,7 +670,7 @@
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
         enableChat();
-        addSuggestion("Match Rosa's Bakery to an existing Meridian Bank customer");
+        addSuggestion("Should we approve the $400,000 term loan for Rosa's Bakery? Check it against Meridian's lending policy.");
       } catch (e) {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Business Plan';
@@ -594,14 +697,17 @@
           addMessage('assistant', data.error);
           return;
         }
-        await animateThinking(thinking, data.steps);
+        await narrateSteps(thinking, data.steps);
         thinking.remove();
         addMessage('assistant', data.reply || '(no response)');
+        // Safety net: narrateSteps already merged/rendered each step's own
+        // delta and appended its own trace card, so this is normally a
+        // no-op re-merge of the same data -- kept in case a future
+        // response ever carries graph data outside the per-step deltas.
         if (data.graph && data.graph.nodes && data.graph.nodes.length) {
           mergeGraphData(data.graph);
           renderGraph();
         }
-        appendTraceSteps(data.steps);
       } catch (e) {
         thinking.remove();
         addMessage('assistant', 'Something went wrong talking to the assistant.');
