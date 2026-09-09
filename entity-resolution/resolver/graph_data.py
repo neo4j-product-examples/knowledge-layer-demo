@@ -57,6 +57,25 @@ def _node_id(source_graph, source_id):
     return f"{source_graph}:{source_id}"
 
 
+def _customer_stub_node(customer_id):
+    """A minimal Customer node, included in every per-tool delta below so
+    the edge back to it always resolves. Without this, asking about a
+    customer's risk profile/credit score/etc. by id directly (skipping
+    find_customer, which is what normally puts the Customer node on
+    canvas) leaves that entity's node floating with no edge -- the
+    frontend has to drop dangling edges rather than crash, so the node
+    just renders disconnected. If find_customer/find_parent_companies also
+    ran, their nicer name-labeled node for the same id simply overwrites
+    this stub client-side (both keyed by the same node id)."""
+    return {
+        "id": _node_id("meridian", customer_id),
+        "label": f"Customer: {customer_id}",
+        "group": "meridian",
+        "color": _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }
+
+
 def _display_label(row):
     entity_label = next((l for l in row["labels"] if l != "Shadow"), "Node")
     name = row.get("customerName") or row.get("name") or row["sourceId"]
@@ -152,12 +171,16 @@ def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
 
 def build_risk_profile_delta(customer_id, kyc, facilities):
     """Graph delta revealing a customer's KYC status and loan facilities
-    (e.g. from get_customer_risk_profile). Assumes the Customer node itself
-    is already on the canvas from an earlier find_customer/find_parent_companies
-    call. Facilities in Delinquent status render in the risk color, same
-    threshold as build_hierarchy_delta."""
+    (e.g. from get_customer_risk_profile). Includes a Customer stub node
+    (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet. Facilities in
+    Delinquent status render in the risk color, same threshold as
+    build_hierarchy_delta."""
+    if not kyc and not facilities:
+        return {"nodes": [], "edges": []}
+
     customer_node_id = _node_id("meridian", customer_id)
-    nodes = []
+    nodes = [_customer_stub_node(customer_id)]
     edges = []
 
     if kyc:
@@ -200,14 +223,15 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
 
 def build_credit_score_delta(customer_id, latest_score):
     """Graph delta revealing a customer's latest credit score (from
-    get_customer_credit_score). Assumes the Customer node is already on
-    the canvas."""
+    get_customer_credit_score). Includes a Customer stub node (see
+    _customer_stub_node) so this renders connected even if find_customer
+    hasn't put the real one on canvas yet."""
     if not latest_score:
         return {"nodes": [], "edges": []}
 
     score_id = latest_score.get("scoreId") or f"CS-{customer_id}"
     score_node_id = _node_id("meridian", score_id)
-    nodes = [{
+    nodes = [_customer_stub_node(customer_id), {
         "id": score_node_id,
         "label": f"Credit Score: {latest_score.get('creditScore')} ({latest_score.get('scoreBand')})",
         "group": "meridian",
@@ -226,10 +250,14 @@ def build_credit_score_delta(customer_id, latest_score):
 
 def build_loan_application_delta(customer_id, applications):
     """Graph delta revealing a customer's loan applications (from
-    get_customer_loan_applications). Assumes the Customer node is already
-    on the canvas."""
+    get_customer_loan_applications). Includes a Customer stub node (see
+    _customer_stub_node) so this renders connected even if find_customer
+    hasn't put the real one on canvas yet."""
+    if not applications:
+        return {"nodes": [], "edges": []}
+
     customer_node_id = _node_id("meridian", customer_id)
-    nodes = []
+    nodes = [_customer_stub_node(customer_id)]
     edges = []
     for application in applications:
         app_node_id = _node_id("meridian", application["applicationId"])
@@ -260,7 +288,7 @@ def build_transaction_summary_delta(customer_id, summary):
 
     net = summary.get("netCashFlow") or 0
     summary_node_id = _node_id("meridian", f"TXN-SUMMARY-{customer_id}")
-    nodes = [{
+    nodes = [_customer_stub_node(customer_id), {
         "id": summary_node_id,
         "label": f"Transactions: {summary['transactionCount']} (net {'-' if net < 0 else '+'}${abs(net):,.2f})",
         "group": "meridian",
@@ -272,6 +300,35 @@ def build_transaction_summary_delta(customer_id, summary):
         "to": summary_node_id,
         "label": "HAS_TRANSACTION_SUMMARY",
         "title": "HAS_TRANSACTION_SUMMARY",
+        "dashes": False,
+    }]
+    return {"nodes": nodes, "edges": edges}
+
+
+def build_relationship_manager_delta(customer_id, relationship_manager):
+    """Graph delta revealing the Employee who covers this customer as its
+    relationship manager (get_relationship_manager). Includes a Customer
+    stub node (see _customer_stub_node) so this renders connected even if
+    find_customer hasn't put the real one on canvas yet."""
+    if not relationship_manager:
+        return {"nodes": [], "edges": []}
+
+    employee_id = relationship_manager["employeeId"]
+    employee_node_id = _node_id("meridian", employee_id)
+    name = relationship_manager.get("fullName") or employee_id
+    role = relationship_manager.get("role")
+    nodes = [_customer_stub_node(customer_id), {
+        "id": employee_node_id,
+        "label": f"{name} ({role})" if role else name,
+        "group": "meridian",
+        "color": _GROUP_COLORS["meridian"],
+        "componentId": None,
+    }]
+    edges = [{
+        "from": _node_id("meridian", customer_id),
+        "to": employee_node_id,
+        "label": "MANAGED_BY",
+        "title": "MANAGED_BY",
         "dashes": False,
     }]
     return {"nodes": nodes, "edges": edges}

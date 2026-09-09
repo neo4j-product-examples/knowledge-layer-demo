@@ -13,9 +13,10 @@ def test_run_get_customer_risk_profile_returns_matching_kyc_and_facilities(fake_
     assert result["customerId"] == "C001"
     assert result["kyc"]["riskRating"] == "Low"
     assert len(result["facilities"]) == 1
-    assert result["graph"]["nodes"][0]["id"] == "meridian:KYC-C001"
-    assert result["graph"]["nodes"][1]["id"] == "meridian:TL-1001"
-    assert result["graph"]["nodes"][1]["color"] != graph_data._RISK_COLOR
+    nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
+    assert "meridian:C001" in nodes_by_id
+    assert "meridian:KYC-C001" in nodes_by_id
+    assert nodes_by_id["meridian:TL-1001"]["color"] != graph_data._RISK_COLOR
 
 
 def test_run_get_customer_risk_profile_handles_customer_with_no_data(fake_session):
@@ -38,7 +39,8 @@ def test_run_get_customer_risk_profile_flags_delinquent_facility(fake_session):
 
     result = chat.run_get_customer_risk_profile(fake_session, "C002")
 
-    assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
+    nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
+    assert nodes_by_id["meridian:LOC-2002"]["color"] == graph_data._RISK_COLOR
 
 
 def test_run_find_customer_builds_matches_payload_and_applies_matches(monkeypatch, fake_session):
@@ -112,7 +114,7 @@ def test_describe_tool_call_includes_customer_id_when_present():
 def test_describe_tool_call_handles_no_customer_id():
     label = chat.describe_tool_call("find_customer", {})
 
-    assert label == "Matching business plan entities to Meridian customers"
+    assert label == "Finding matching Meridian customer"
 
 
 def test_describe_tool_call_falls_back_for_unknown_tool():
@@ -135,9 +137,9 @@ def test_run_get_customer_credit_score_returns_latest_and_history(monkeypatch, f
 
     assert result["latestScore"]["creditScore"] == 721
     assert len(result["scoreHistory"]) == 2
-    assert result["graph"]["nodes"][0]["label"] == "Credit Score: 721 (Good)"
+    score_node = next(n for n in result["graph"]["nodes"] if n["label"] == "Credit Score: 721 (Good)")
     assert result["graph"]["edges"][0] == {
-        "from": "meridian:C001", "to": result["graph"]["nodes"][0]["id"],
+        "from": "meridian:C001", "to": score_node["id"],
         "label": "HAS_CREDIT_SCORE", "title": "HAS_CREDIT_SCORE", "dashes": False,
     }
 
@@ -166,10 +168,12 @@ def test_run_get_customer_loan_applications_filters_by_customer(monkeypatch, fak
     assert result["applications"] == [
         {"customerId": "C001", "applicationId": "APP-3001", "status": "Under Review", "applicationDate": "2024-01-01"}
     ]
-    assert result["graph"]["nodes"] == [{
+    nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
+    assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
+    assert nodes_by_id["meridian:APP-3001"] == {
         "id": "meridian:APP-3001", "label": "Loan Application: APP-3001 (Under Review)",
         "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
-    }]
+    }
     assert result["graph"]["edges"] == [{
         "from": "meridian:C001", "to": "meridian:APP-3001",
         "label": "APPLIED_FOR", "title": "APPLIED_FOR", "dashes": False,
@@ -195,7 +199,8 @@ def test_run_get_customer_transaction_summary_computes_cash_flow(monkeypatch, fa
     assert result["transactionTypeBreakdown"] == {"Deposit": 1, "Withdrawal": 1}
     assert result["earliestDate"] == "2024-01-01"
     assert result["latestDate"] == "2024-02-01"
-    assert result["graph"]["nodes"][0]["color"] == graph_data._GROUP_COLORS["meridian"]
+    summary_node = next(n for n in result["graph"]["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C001")
+    assert summary_node["color"] == graph_data._GROUP_COLORS["meridian"]
     assert result["graph"]["edges"][0]["from"] == "meridian:C001"
 
 
@@ -209,7 +214,74 @@ def test_run_get_customer_transaction_summary_flags_negative_cash_flow(monkeypat
 
     result = chat.run_get_customer_transaction_summary(fake_session, "C002")
 
-    assert result["graph"]["nodes"][0]["color"] == graph_data._RISK_COLOR
+    summary_node = next(n for n in result["graph"]["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C002")
+    assert summary_node["color"] == graph_data._RISK_COLOR
+
+
+def test_run_get_relationship_manager_joins_branch_info(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_relationship_managers",
+        lambda s: [{"customerId": "C001", "employeeId": "EMP002", "fullName": "Jamie Arnold", "role": "Relationship Manager"}],
+    )
+    monkeypatch.setattr(
+        matching, "fetch_meridian_employee_branches",
+        lambda s: [{"employeeId": "EMP002", "branchName": "Cedarville Main", "city": "Cedarville", "state": "OH"}],
+    )
+
+    result = chat.run_get_relationship_manager(fake_session, "C001")
+
+    assert result["relationshipManager"] == {
+        "employeeId": "EMP002", "fullName": "Jamie Arnold", "role": "Relationship Manager",
+        "branchName": "Cedarville Main", "city": "Cedarville", "state": "OH",
+    }
+    node_ids = {n["id"] for n in result["graph"]["nodes"]}
+    assert node_ids == {"meridian:C001", "meridian:EMP002"}
+
+
+def test_run_get_relationship_manager_handles_no_coverage(monkeypatch, fake_session):
+    monkeypatch.setattr(matching, "fetch_meridian_customer_relationship_managers", lambda s: [])
+    monkeypatch.setattr(matching, "fetch_meridian_employee_branches", lambda s: [])
+
+    result = chat.run_get_relationship_manager(fake_session, "C999")
+
+    assert result["relationshipManager"] is None
+    assert result["graph"] == {"nodes": [], "edges": []}
+
+
+def test_run_get_lending_policy_returns_rules_for_product_type(monkeypatch, fake_session):
+    monkeypatch.setattr(
+        matching, "fetch_lending_policy_rules",
+        lambda s, code: [{"ruleId": "POL-001", "criterion": "Minimum Credit Score", "threshold": 650}],
+    )
+
+    result = chat.run_get_lending_policy(fake_session, "LN-TERM")
+
+    assert result == {
+        "productTypeCode": "LN-TERM",
+        "rules": [{"ruleId": "POL-001", "criterion": "Minimum Credit Score", "threshold": 650}],
+    }
+
+
+def test_run_tool_dispatches_get_lending_policy(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_lending_policy", lambda session, code: {"productTypeCode": code})
+
+    result = chat.run_tool("get_lending_policy", {"product_type_code": "LN-TERM"}, fake_session)
+
+    assert result == {"productTypeCode": "LN-TERM"}
+
+
+def test_describe_tool_call_includes_product_type_code_when_present():
+    label = chat.describe_tool_call("get_lending_policy", {"product_type_code": "LN-TERM"})
+
+    assert label == "Checking lending policy (LN-TERM)"
+
+
+def test_run_tool_dispatches_get_relationship_manager(monkeypatch, fake_session):
+    monkeypatch.setattr(chat, "run_get_relationship_manager", lambda session, customer_id: {"customerId": customer_id})
+
+    result = chat.run_tool("get_relationship_manager", {"customer_id": "C001"}, fake_session)
+
+    assert result == {"customerId": "C001"}
 
 
 def test_run_tool_dispatches_get_customer_credit_score(monkeypatch, fake_session):

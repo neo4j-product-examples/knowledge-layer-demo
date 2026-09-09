@@ -349,6 +349,53 @@ def fetch_meridian_customer_transactions(session):
     return [dict(r) for r in result]
 
 
+def fetch_meridian_customer_relationship_managers(session):
+    """Customer-[:MANAGED_BY]->Employee rows -- which relationship manager
+    (if any) already covers this customer, for loan-decision questions
+    (is there existing human context/coverage on this relationship)."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:MANAGED_BY]->(e:Employee)
+        RETURN c.customerId AS customerId, e.employeeId AS employeeId,
+               e.fullName AS fullName, e.role AS role
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_employee_branches(session):
+    """Employee-[:WORKS_AT]->Branch rows, for showing which branch a
+    customer's relationship manager works out of."""
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (e:Employee)-[:WORKS_AT]->(b:Branch)
+        RETURN e.employeeId AS employeeId, b.branchName AS branchName,
+               b.city AS city, b.state AS state
+        """
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_lending_policy_rules(session, product_type_code):
+    """ProductType-[:HAS_POLICY_RULE]->PolicyRule rows for one product type,
+    from the lendingpolicy constituent (separate AuraDB, not the meridian
+    banking data) -- the bank's own underwriting criteria, so a loan
+    recommendation can be checked against cited policy rather than
+    reasoned freeform."""
+    result = session.run(
+        """
+        USE meridianComposite.lendingpolicy
+        MATCH (p:ProductType {productTypeCode: $productTypeCode})-[:HAS_POLICY_RULE]->(r:PolicyRule)
+        RETURN r.ruleId AS ruleId, r.criterion AS criterion, r.comparison AS comparison,
+               r.threshold AS threshold, r.unit AS unit, r.section AS section, r.description AS description
+        """,
+        productTypeCode=product_type_code,
+    )
+    return [dict(r) for r in result]
+
+
 def fetch_document_ownership(session):
     """Person-[:OWNS {pct, role}]->Organization pairs (e.g. Rosa/Marcus
     Alvarez owning Rosa's Bakery) — mirrors fetch_meridian_account_ownership

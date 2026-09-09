@@ -197,7 +197,7 @@ def chat():
             for _ in range(MAX_TOOL_ITERATIONS):
                 response = client.messages.create(
                     model=CHAT_MODEL,
-                    max_tokens=1024,
+                    max_tokens=4096,
                     system=chat_tools.SYSTEM_PROMPT,
                     tools=chat_tools.TOOLS,
                     messages=_chat_history,
@@ -208,6 +208,17 @@ def chat():
                     final_text = "".join(
                         block.text for block in response.content if block.type == "text"
                     )
+                    if not final_text.strip():
+                        block_types = [block.type for block in response.content]
+                        logger.warning(
+                            "Model returned no text content (stop_reason=%s, block_types=%s, steps=%d)",
+                            response.stop_reason, block_types, len(steps),
+                        )
+                        final_text = (
+                            "The assistant finished its analysis but didn't return a written "
+                            "summary this time -- the decision trace above shows every step it "
+                            "completed. Try asking again."
+                        )
                     return jsonify({
                         "status": "ok",
                         "reply": final_text,
@@ -227,6 +238,10 @@ def chat():
                         "tool": block.name,
                         "label": chat_tools.describe_tool_call(block.name, block.input),
                         "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                        # This step's own delta, so the client can reveal it on
+                        # canvas in sync with narrating this step live, instead
+                        # of the whole graph appearing at once at the end.
+                        "graph": graph_delta or {"nodes": [], "edges": []},
                     })
                     tool_results.append({
                         "type": "tool_result",

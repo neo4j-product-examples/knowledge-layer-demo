@@ -165,10 +165,9 @@ def test_build_credit_score_delta_labels_score_and_band():
 
     delta = graph_data.build_credit_score_delta("C001", latest_score)
 
-    assert delta["nodes"] == [{
-        "id": "meridian:CS0000010", "label": "Credit Score: 721 (Good)",
-        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
-    }]
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
+    assert nodes_by_id["meridian:CS0000010"]["label"] == "Credit Score: 721 (Good)"
     assert delta["edges"] == [{
         "from": "meridian:C001", "to": "meridian:CS0000010",
         "label": "HAS_CREDIT_SCORE", "title": "HAS_CREDIT_SCORE", "dashes": False,
@@ -189,9 +188,10 @@ def test_build_loan_application_delta_creates_node_and_edge_per_application():
 
     delta = graph_data.build_loan_application_delta("C001", applications)
 
-    assert len(delta["nodes"]) == 2
+    assert len(delta["nodes"]) == 3  # customer stub + 2 applications
     assert len(delta["edges"]) == 2
-    assert delta["nodes"][0]["label"] == "Loan Application: APP-3001 (Under Review)"
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:APP-3001"]["label"] == "Loan Application: APP-3001 (Under Review)"
     assert delta["edges"][0] == {
         "from": "meridian:C001", "to": "meridian:APP-3001",
         "label": "APPLIED_FOR", "title": "APPLIED_FOR", "dashes": False,
@@ -203,8 +203,9 @@ def test_build_transaction_summary_delta_flags_negative_cash_flow():
 
     delta = graph_data.build_transaction_summary_delta("C002", summary)
 
-    assert delta["nodes"][0]["color"] == graph_data._RISK_COLOR
-    assert "48" in delta["nodes"][0]["label"]
+    summary_node = next(n for n in delta["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C002")
+    assert summary_node["color"] == graph_data._RISK_COLOR
+    assert "48" in summary_node["label"]
     assert delta["edges"][0]["from"] == "meridian:C002"
 
 
@@ -213,11 +214,35 @@ def test_build_transaction_summary_delta_positive_cash_flow_is_not_flagged():
 
     delta = graph_data.build_transaction_summary_delta("C001", summary)
 
-    assert delta["nodes"][0]["color"] == graph_data._GROUP_COLORS["meridian"]
+    summary_node = next(n for n in delta["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C001")
+    assert summary_node["color"] == graph_data._GROUP_COLORS["meridian"]
 
 
 def test_build_transaction_summary_delta_handles_no_transactions():
     delta = graph_data.build_transaction_summary_delta("C999", {"transactionCount": 0, "netCashFlow": 0})
+
+    assert delta == {"nodes": [], "edges": []}
+
+
+def test_build_relationship_manager_delta_labels_name_and_role():
+    manager = {"employeeId": "EMP002", "fullName": "Jamie Arnold", "role": "Relationship Manager"}
+
+    delta = graph_data.build_relationship_manager_delta("C001", manager)
+
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
+    assert nodes_by_id["meridian:EMP002"] == {
+        "id": "meridian:EMP002", "label": "Jamie Arnold (Relationship Manager)",
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+    }
+    assert delta["edges"] == [{
+        "from": "meridian:C001", "to": "meridian:EMP002",
+        "label": "MANAGED_BY", "title": "MANAGED_BY", "dashes": False,
+    }]
+
+
+def test_build_relationship_manager_delta_handles_no_manager():
+    delta = graph_data.build_relationship_manager_delta("C999", None)
 
     assert delta == {"nodes": [], "edges": []}
 
