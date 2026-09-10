@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from resolver import chat as chat_tools
-from resolver import db, graph_data, matching, shadow_nodes
+from resolver import db, graph_data, matching, ontology, shadow_nodes
 
 load_dotenv()
 
@@ -87,6 +87,21 @@ def api_graph():
     except Exception:
         logger.exception("Failed to fetch shadow graph")
         return jsonify({"error": "Could not fetch graph data from shadowDb."}), 500
+
+
+@app.route("/api/ontology")
+def api_ontology():
+    """Static architecture reveal for the "View Ontology" panel: how the
+    composite database's real constituents fit together. Separate from
+    api_graph -- this doesn't change during a session, so the frontend
+    fetches it once and caches it."""
+    try:
+        with db.get_session(get_driver()) as session:
+            graph = ontology.fetch_ontology_graph(session)
+        return jsonify(graph)
+    except Exception:
+        logger.exception("Failed to fetch ontology graph")
+        return jsonify({"error": "Could not fetch the ontology graph."}), 500
 
 
 @app.route("/api/upload-business-plan", methods=["POST"])
