@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 BLOOM_URL = os.environ.get("BLOOM_URL", "")
 CHAT_MODEL = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5")
 MAX_TOOL_ITERATIONS = 6
+# The whole demo is built around this one applicant -- reset her own
+# recorded decision on every page load so one run's recommendation never
+# carries over into the next (see index()). Seeded historical decisions for
+# other customers are permanent precedent and are left alone.
+ROSA_CUSTOMER_ID = "C001"
 
 _driver = None
 _anthropic_client = None
@@ -63,6 +68,7 @@ def index():
         ensure_meridian_seeded()
         with db.get_session(get_driver()) as session:
             shadow_nodes.clear_document_shadow_data(session)
+            matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
         logger.exception("Failed to seed Meridian shadow nodes")
         return render_template("index.html", error=(

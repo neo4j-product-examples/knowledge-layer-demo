@@ -447,6 +447,64 @@ def fetch_lending_policy_rules(session, product_type_code):
     return [dict(r) for r in result]
 
 
+def fetch_decision_history(session, product_type_code, customer_id=None):
+    """Past Decision nodes from the context constituent (separate AuraDB,
+    not meridian/documents/lendingpolicy) -- Meridian's own history of loan
+    recommendations, so a new recommendation can cite precedent ("have we
+    approved similar loans before, and why") instead of reasoning about this
+    application in isolation. Matches on product type (peer decisions) OR
+    this specific customer's own past decisions, whichever applies."""
+    result = session.run(
+        """
+        USE meridianComposite.context
+        MATCH (d:Decision)
+        WHERE d.productTypeCode = $productTypeCode OR d.customerId = $customerId
+        RETURN d.decisionId AS decisionId, d.customerId AS customerId,
+               d.customerName AS customerName, d.productTypeCode AS productTypeCode,
+               d.requestedAmount AS requestedAmount, d.recommendation AS recommendation,
+               d.reasoning AS reasoning, d.appliedRuleIds AS appliedRuleIds,
+               d.escalationRole AS escalationRole, d.decidedAt AS decidedAt
+        ORDER BY d.decidedAt DESC
+        """,
+        productTypeCode=product_type_code, customerId=customer_id,
+    )
+    return [dict(r) for r in result]
+
+
+def clear_customer_decisions(session, customer_id):
+    """Deletes any recorded Decision nodes for one customer from the context
+    constituent. Used to reset Rosa's Bakery's own decision to blank on every
+    app load (see app.py's index route) so one demo run's recommendation
+    never carries over into the next -- seeded historical decisions for
+    other customers are untouched."""
+    session.run(
+        """
+        USE meridianComposite.context
+        MATCH (d:Decision {customerId: $customerId})
+        DETACH DELETE d
+        """,
+        customerId=customer_id,
+    )
+
+
+def record_decision(session, decision):
+    """Persists one recommendation to the context constituent (MERGE on
+    decisionId, so re-recording the same decisionId updates it in place
+    rather than duplicating)."""
+    session.run(
+        """
+        USE meridianComposite.context
+        MERGE (d:Decision {decisionId: $decisionId})
+        SET d.customerId = $customerId, d.customerName = $customerName,
+            d.productTypeCode = $productTypeCode, d.requestedAmount = $requestedAmount,
+            d.recommendation = $recommendation, d.reasoning = $reasoning,
+            d.appliedRuleIds = $appliedRuleIds, d.escalationRole = $escalationRole,
+            d.decidedAt = $decidedAt
+        """,
+        **decision,
+    )
+
+
 def fetch_document_ownership(session):
     """Person-[:OWNS {pct, role}]->Organization pairs (e.g. Rosa/Marcus
     Alvarez owning Rosa's Bakery) — mirrors fetch_meridian_account_ownership

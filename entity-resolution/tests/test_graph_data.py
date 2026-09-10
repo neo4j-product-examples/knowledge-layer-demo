@@ -285,6 +285,70 @@ def test_build_lending_policy_delta_handles_no_rules():
     assert delta == {"nodes": [], "edges": []}
 
 
+def test_build_decision_delta_connects_each_decision_to_its_own_customer():
+    decisions = [
+        {
+            "decisionId": "DEC-C005-SEED", "customerId": "C005", "customerName": "Snyder, Campos and Callahan",
+            "recommendation": "Escalate", "reasoning": "Affiliate delinquency.", "escalationRole": "Credit Risk Committee",
+        },
+        {
+            "decisionId": "DEC-C002-SEED", "customerId": "C002", "customerName": "Alvarez Distribution Co",
+            "recommendation": "Approve", "reasoning": "Clean credit profile.", "escalationRole": None,
+        },
+    ]
+
+    delta = graph_data.build_decision_delta(decisions)
+
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:C005"]["label"] == "Customer: C005"
+    assert nodes_by_id["context:DEC-C005-SEED"]["label"] == "Escalate: Snyder, Campos and Callahan"
+    assert nodes_by_id["context:DEC-C005-SEED"]["color"] == graph_data._RISK_COLOR
+    assert nodes_by_id["context:DEC-C002-SEED"]["color"] == graph_data._GROUP_COLORS["context"]
+
+    edges = {(e["from"], e["to"], e["label"], e["dashes"]) for e in delta["edges"]}
+    assert ("meridian:C005", "context:DEC-C005-SEED", "HAS_DECISION", False) in edges
+    assert ("meridian:C002", "context:DEC-C002-SEED", "HAS_DECISION", False) in edges
+    # No current_customer_id was given, so no CITED_AS_PRECEDENT edges.
+    assert all(e[2] != "CITED_AS_PRECEDENT" for e in edges)
+
+
+def test_build_decision_delta_adds_precedent_edge_for_other_customers():
+    decisions = [
+        {
+            "decisionId": "DEC-C005-SEED", "customerId": "C005", "customerName": "Snyder, Campos and Callahan",
+            "recommendation": "Escalate", "reasoning": "Affiliate delinquency.", "escalationRole": "Credit Risk Committee",
+        },
+    ]
+
+    delta = graph_data.build_decision_delta(decisions, current_customer_id="C001")
+
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert "meridian:C001" in nodes_by_id
+
+    edges = {(e["from"], e["to"], e["label"], e["dashes"]) for e in delta["edges"]}
+    assert ("meridian:C001", "context:DEC-C005-SEED", "CITED_AS_PRECEDENT", True) in edges
+
+
+def test_build_decision_delta_skips_precedent_edge_for_same_customer():
+    decisions = [
+        {
+            "decisionId": "DEC-C001-1", "customerId": "C001", "customerName": "Rosas Bakery",
+            "recommendation": "Escalate", "reasoning": "...", "escalationRole": "Credit Risk Committee",
+        },
+    ]
+
+    delta = graph_data.build_decision_delta(decisions, current_customer_id="C001")
+
+    labels = {e["label"] for e in delta["edges"]}
+    assert "CITED_AS_PRECEDENT" not in labels
+
+
+def test_build_decision_delta_handles_no_decisions():
+    delta = graph_data.build_decision_delta([])
+
+    assert delta == {"nodes": [], "edges": []}
+
+
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],
