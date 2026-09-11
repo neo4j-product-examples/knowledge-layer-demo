@@ -49,7 +49,7 @@ WHERE a.sourceId IN $ids AND b.sourceId IN $ids
 RETURN a.sourceId AS fromId, b.sourceId AS toId
 """
 
-_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8"}
+_GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8", "context": "#7A5C99"}
 _RISK_COLOR = "#D6483F"
 
 
@@ -402,6 +402,63 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
             })
 
     return {"nodes": nodes, "edges": edges}
+
+
+def build_decision_delta(decisions, current_customer_id=None):
+    """Graph delta revealing past loan decisions from the context constituent
+    (get_decision_history / record_decision). Each Decision connects to a
+    Customer stub node (see _customer_stub_node) for whichever customer it
+    was actually about, so precedent decisions about other customers render
+    attached to their own customer rather than conflated with whoever is
+    currently under discussion. Escalated decisions render in the risk
+    color, same convention as build_lending_policy_delta.
+
+    When current_customer_id is given (get_decision_history was scoped to a
+    customer), any decision about a *different* customer also gets a dashed
+    "CITED_AS_PRECEDENT" edge from the current customer -- otherwise a
+    precedent decision would render as an unexplained, fully disconnected
+    island with no visual link to the case it's actually informing."""
+    if not decisions:
+        return {"nodes": [], "edges": []}
+
+    nodes = {}
+    edges = []
+    if current_customer_id:
+        current_customer_node = _customer_stub_node(current_customer_id)
+        nodes[current_customer_node["id"]] = current_customer_node
+
+    for decision in decisions:
+        customer_id = decision["customerId"]
+        customer_node = _customer_stub_node(customer_id)
+        nodes[customer_node["id"]] = customer_node
+
+        decision_node_id = _node_id("context", decision["decisionId"])
+        is_escalated = bool(decision.get("escalationRole"))
+        nodes[decision_node_id] = {
+            "id": decision_node_id,
+            "label": f"{decision['recommendation']}: {decision.get('customerName') or customer_id}",
+            "group": "context",
+            "color": _RISK_COLOR if is_escalated else _GROUP_COLORS["context"],
+            "componentId": None,
+        }
+        edges.append({
+            "from": customer_node["id"],
+            "to": decision_node_id,
+            "label": "HAS_DECISION",
+            "title": decision.get("reasoning") or "HAS_DECISION",
+            "dashes": False,
+        })
+
+        if current_customer_id and customer_id != current_customer_id:
+            edges.append({
+                "from": _node_id("meridian", current_customer_id),
+                "to": decision_node_id,
+                "label": "CITED_AS_PRECEDENT",
+                "title": "CITED_AS_PRECEDENT",
+                "dashes": True,
+            })
+
+    return {"nodes": list(nodes.values()), "edges": edges}
 
 
 def fetch_graph_json(session):

@@ -265,6 +265,73 @@
     }
     .trace-step-label { color: var(--navy); font-weight: 600; line-height: 1.3; }
     .trace-step-time { color: var(--muted); font-size: 10px; }
+
+    /* ---------- Ontology dock (bottom-anchored, expands upward) ---------- */
+    #ontology-dock {
+      position: fixed;
+      left: 16px; right: 16px; bottom: 16px;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      pointer-events: none;
+    }
+    #ontology-toggle {
+      pointer-events: auto;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--navy);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: 999px;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #ontology-toggle:hover { background: var(--cream); }
+    #ontology-toggle-icon { font-size: 10px; color: var(--muted); }
+    #ontology-panel {
+      pointer-events: auto;
+      width: 100%;
+      max-width: 1400px;
+      height: 0;
+      opacity: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--panel);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      /* Only opacity animates -- height snaps instantly. NVL (built right
+         after this toggles) needs a real final height the moment it reads
+         the container, and a height *transition* can't be relied on to
+         actually finish before that read in every environment. */
+      transition: opacity 0.15s ease;
+      margin-bottom: 0;
+    }
+    /* A real (non-percentage) height, not max-height -- so it fills nearly
+       the whole page when open, and so NVL's inline height:100% on
+       #ontology-graph resolves against a definite ancestor height instead
+       of an auto one (see the comment below). */
+    #ontology-panel.open { height: calc(100vh - 90px); opacity: 1; margin-bottom: 10px; }
+    #ontology-panel-header { padding: 14px 20px 6px; flex-shrink: 0; }
+    #ontology-panel-title { font-size: 14px; font-weight: 700; color: var(--navy); }
+    #ontology-panel-subtitle { font-size: 12px; color: var(--slate); margin-top: 2px; }
+    /* flex:1 (not a fixed height) -- fills whatever's left of the panel's
+       own calc()-based height above, so the graph grows to fit the page. */
+    #ontology-panel-body { display: flex; gap: 16px; padding: 4px 20px 18px; flex: 1; min-height: 0; }
+    /* NVL sets its container to inline height:100%, which needs a real
+       (non-auto) ancestor height to resolve against -- see
+       #ontology-panel-body and #ontology-panel.open above. */
+    #ontology-graph { flex: 1; min-width: 0; background: var(--panel); border-radius: 8px; }
+    #ontology-detail { width: 230px; flex-shrink: 0; font-size: 12px; color: var(--slate); overflow-y: auto; }
+    #ontology-detail-empty { color: var(--muted); }
+    #ontology-detail h4 { margin: 0 0 4px; font-size: 13px; color: var(--navy); }
+    #ontology-detail p { margin: 0 0 8px; line-height: 1.4; }
+    #ontology-detail .ont-detail-backend { color: var(--muted); font-style: italic; }
   </style>
 </head>
 <body>
@@ -309,6 +376,7 @@
           <span><span class="dot" style="background:#2B5876"></span>Banking Virtual Graph</span>
           <span><span class="dot" style="background:#D98847"></span>Business Plan Knowledge Graph</span>
           <span><span class="dot" style="background:#4FA9B8"></span>Lending Policy</span>
+          <span><span class="dot" style="background:#7A5C99"></span>Decision History</span>
           <span><span class="dot" style="background:#D6483F"></span>Risk Flagged</span>
         </div>
       </div>
@@ -319,6 +387,25 @@
       <div id="tool-call-trace-empty">Every step the assistant takes will be logged here for audit.</div>
       <div id="tool-call-trace-entries"></div>
     </div>
+  </div>
+
+  <div id="ontology-dock">
+    <div id="ontology-panel">
+      <div id="ontology-panel-header">
+        <div id="ontology-panel-title">How the Knowledge Layer fits together</div>
+        <div id="ontology-panel-subtitle">Five graphs, one composite database -- each a pointer to a source, not a copy.</div>
+      </div>
+      <div id="ontology-panel-body">
+        <div id="ontology-graph"></div>
+        <div id="ontology-detail">
+          <div id="ontology-detail-empty">Drag nodes around, or click one to see what it holds and how it connects.</div>
+        </div>
+      </div>
+    </div>
+    <button id="ontology-toggle">
+      <span id="ontology-toggle-icon">&#9656;</span>
+      <span id="ontology-toggle-label">View Ontology</span>
+    </button>
   </div>
 
   <script type="module">
@@ -807,6 +894,142 @@
       setSize: (h) => { toolCallTraceEl.style.height = `${h}px`; },
       min: 90,
       max: () => window.innerHeight * 0.5,
+    });
+
+    // ---------- Ontology panel: a static architecture reveal, separate
+    // from the shadow/decision graph above -- fetched once and cached
+    // (it doesn't change during a session), rendered in its own NVL
+    // instance so nodes are draggable just like the main graph. Built
+    // lazily on first open, not up front, since NVL needs a real
+    // container to size itself against.
+    const ontologyToggle = document.getElementById('ontology-toggle');
+    const ontologyToggleIcon = document.getElementById('ontology-toggle-icon');
+    const ontologyToggleLabel = document.getElementById('ontology-toggle-label');
+    const ontologyPanel = document.getElementById('ontology-panel');
+    const ontologyGraphContainer = document.getElementById('ontology-graph');
+    const ontologyDetail = document.getElementById('ontology-detail');
+    let ontologyData = null;
+    let ontologyNvl = null;
+    let ontologyOpen = false;
+
+    async function loadOntology() {
+      if (ontologyData) return ontologyData;
+      const res = await fetch('/api/ontology');
+      ontologyData = await res.json();
+      return ontologyData;
+    }
+
+    function showOntologyDetail(node) {
+      document.getElementById('ontology-detail-empty')?.remove();
+      ontologyDetail.innerHTML = `
+        <h4></h4>
+        <p class="ont-detail-backend"></p>
+        <p class="ont-detail-desc"></p>
+      `;
+      ontologyDetail.querySelector('h4').textContent = node.label;
+      ontologyDetail.querySelector('.ont-detail-backend').textContent = node.backend || '';
+      ontologyDetail.querySelector('.ont-detail-desc').textContent = node.description || '';
+    }
+
+    // Radial "hub and branch" starting layout: the 5 DataProduct hubs sit
+    // on a ring around the center; each hub's own SchemaEntity children
+    // fan out further along that same outward direction. Nodes are fully
+    // draggable after this via DragNodeInteraction -- this is just a
+    // reasonable starting arrangement, not a fixed structure.
+    function layoutOntologyNodes(nodes, edges) {
+      const width = 1000, height = 800;
+      const cx = width / 2, cy = height / 2;
+      const hubRadius = 220;
+      const leafRadius = 380;
+      const positions = new Map();
+
+      const hubs = nodes.filter(n => n.kind === 'hub');
+      const hubAngle = new Map();
+      hubs.forEach((hub, i) => {
+        const angle = (2 * Math.PI * i) / hubs.length - Math.PI / 2;
+        hubAngle.set(hub.id, angle);
+        positions.set(hub.id, { x: cx + hubRadius * Math.cos(angle), y: cy + hubRadius * Math.sin(angle) });
+      });
+
+      const childrenByHub = new Map(hubs.map(h => [h.id, []]));
+      for (const edge of edges) {
+        if (edge.kind === 'membership' && childrenByHub.has(edge.from)) {
+          childrenByHub.get(edge.from).push(edge.to);
+        }
+      }
+
+      // Cap the fan-out spread below a hub's own 2*pi/hubCount slice (so a
+      // branch with many children doesn't swing into its neighbors'
+      // territory), and stagger radius slightly (even/odd) to give crowded
+      // branches some breathing room instead of packing everything onto
+      // one tight arc.
+      const maxSpread = Math.min(1.1, (2 * Math.PI) / hubs.length - 0.3);
+      for (const [hubId, childIds] of childrenByHub) {
+        const baseAngle = hubAngle.get(hubId);
+        const spread = Math.min(maxSpread, 0.22 * childIds.length);
+        childIds.forEach((childId, i) => {
+          const t = childIds.length > 1 ? i / (childIds.length - 1) - 0.5 : 0;
+          const angle = baseAngle + t * spread;
+          const radius = leafRadius + (i % 2 === 1 ? 95 : 0);
+          positions.set(childId, { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) });
+        });
+      }
+
+      return positions;
+    }
+
+    function attachOntologyInteractions(nvlInstance) {
+      new PanInteraction(nvlInstance);
+      new ZoomInteraction(nvlInstance);
+      new DragNodeInteraction(nvlInstance);
+      const clickInteraction = new ClickInteraction(nvlInstance);
+      clickInteraction.updateCallback('onNodeClick', (nvlNode) => {
+        const node = (ontologyData.nodes || []).find(n => n.id === nvlNode.id);
+        if (node) showOntologyDetail(node);
+      });
+    }
+
+    function renderOntology(data) {
+      const nodes = data.nodes || [];
+      const edges = data.edges || [];
+      const positions = layoutOntologyNodes(nodes, edges);
+
+      const nvlNodes = nodes.map(n => {
+        const pos = positions.get(n.id) || { x: 0, y: 0 };
+        return {
+          id: n.id, caption: n.kind === 'hub' ? n.shortCode : n.label,
+          color: n.color, size: n.kind === 'hub' ? 32 : 18,
+          x: pos.x, y: pos.y,
+        };
+      });
+      const nvlEdges = edges.map((e, i) => ({
+        id: `${e.from}->${e.to}:${e.label}:${i}`,
+        from: e.from, to: e.to, caption: e.label,
+        color: e.kind === 'membership' ? '#D9CFB8' : '#9C8F73',
+        width: e.kind === 'membership' ? 1 : 1.5,
+      }));
+
+      ontologyNvl = new NVL(ontologyGraphContainer, nvlNodes, nvlEdges, { backgroundColor: '#FFFFFF' });
+      attachOntologyInteractions(ontologyNvl);
+      // Same NVL quirk as the main graph: first paint doesn't reliably
+      // apply constructor-time x/y until setNodePositions is called.
+      ontologyNvl.setNodePositions(nvlNodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+      requestAnimationFrame(() => requestAnimationFrame(() => ontologyNvl?.fit()));
+    }
+
+    ontologyToggle.addEventListener('click', async () => {
+      ontologyOpen = !ontologyOpen;
+      ontologyPanel.classList.toggle('open', ontologyOpen);
+      ontologyToggleIcon.innerHTML = ontologyOpen ? '&#9662;' : '&#9656;';
+      ontologyToggleLabel.textContent = ontologyOpen ? 'Hide Ontology' : 'View Ontology';
+      // #ontology-panel's height (unlike its opacity) isn't transitioned,
+      // so it's already at its final size the instant the class above is
+      // toggled -- NVL (built lazily on first open, below) reads a correct
+      // container size right away with no animation to wait out.
+      if (ontologyOpen && !ontologyNvl) {
+        const data = await loadOntology();
+        renderOntology(data);
+      }
     });
   </script>
 </body>

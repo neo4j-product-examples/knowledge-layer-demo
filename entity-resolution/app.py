@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from resolver import chat as chat_tools
-from resolver import db, graph_data, matching, shadow_nodes
+from resolver import db, graph_data, matching, ontology, shadow_nodes
 
 load_dotenv()
 
@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 BLOOM_URL = os.environ.get("BLOOM_URL", "")
 CHAT_MODEL = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5")
 MAX_TOOL_ITERATIONS = 6
+# The whole demo is built around this one applicant -- reset her own
+# recorded decision on every page load so one run's recommendation never
+# carries over into the next (see index()). Seeded historical decisions for
+# other customers are permanent precedent and are left alone.
+ROSA_CUSTOMER_ID = "C001"
 
 _driver = None
 _anthropic_client = None
@@ -63,6 +68,7 @@ def index():
         ensure_meridian_seeded()
         with db.get_session(get_driver()) as session:
             shadow_nodes.clear_document_shadow_data(session)
+            matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
         logger.exception("Failed to seed Meridian shadow nodes")
         return render_template("index.html", error=(
@@ -81,6 +87,21 @@ def api_graph():
     except Exception:
         logger.exception("Failed to fetch shadow graph")
         return jsonify({"error": "Could not fetch graph data from shadowDb."}), 500
+
+
+@app.route("/api/ontology")
+def api_ontology():
+    """Static architecture reveal for the "View Ontology" panel: how the
+    composite database's real constituents fit together. Separate from
+    api_graph -- this doesn't change during a session, so the frontend
+    fetches it once and caches it."""
+    try:
+        with db.get_session(get_driver()) as session:
+            graph = ontology.fetch_ontology_graph(session)
+        return jsonify(graph)
+    except Exception:
+        logger.exception("Failed to fetch ontology graph")
+        return jsonify({"error": "Could not fetch the ontology graph."}), 500
 
 
 @app.route("/api/upload-business-plan", methods=["POST"])

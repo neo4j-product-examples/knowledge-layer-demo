@@ -1,6 +1,8 @@
 """LLM tool-use loop backing the real chat: a small, curated set of tools
 wrapping the same functions the earlier scripted UI called directly, so the
 model picks which action to take instead of the UI hardcoding two steps."""
+import datetime
+
 from resolver import graph_data, matching, shadow_nodes
 
 SYSTEM_PROMPT = """You are an assistant embedded in a graph exploration tool for a bank analyst.
@@ -32,6 +34,22 @@ reasoning about creditworthiness in the abstract. If any policy rule references
 affiliates, related entities, or common ownership, you must call
 find_parent_companies for this customer to check them -- do not assume the
 applicant's own facilities are the only ones that rule applies to.
+
+Also call get_decision_history for the applicable product type (and this customer_id)
+to check precedent -- has the bank approved, declined, or escalated similar loans
+before, and why. Ground your recommendation in that history where it's relevant
+(e.g. "consistent with how we handled a similar term loan for X") rather than
+reasoning about this application as if it were the first one ever made.
+
+Whenever you state a specific recommendation (approve/decline/escalate/conditional)
+for a specific loan, you MUST call record_decision immediately before writing your
+final answer -- this is not optional and is not the same step as get_lending_policy
+or get_decision_history. Call every other tool you need first, reach your
+recommendation, then call record_decision with that recommendation and a concise
+reasoning summary (including the policy rule IDs that actually drove it) as your
+very last tool call, so it becomes part of the bank's decision history for future
+questions. Only skip it for questions that don't reach a specific recommendation
+(e.g. pulling up a customer's credit score with no ask about approving anything).
 
 get_business_plan_details is the applicant's own account of the loan (their stated
 use of proceeds, market and repayment rationale) -- it is not Meridian's system of
@@ -182,6 +200,75 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "get_decision_history",
+        "description": (
+            "Returns past loan decisions from Meridian's decision history (the "
+            "context graph) for a given product type, optionally scoped to one "
+            "customer's own history. Use this for loan-decision questions to check "
+            "precedent -- has the bank approved, declined, or escalated similar "
+            "loans before, and why -- so a new recommendation is grounded in past "
+            "decisions instead of reasoned in isolation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product_type_code": {
+                    "type": "string",
+                    "description": (
+                        "One of: 'LN-TERM' (Term Loan), 'LN-SBA' (SBA Loan), "
+                        "'LN-LOC' (Line of Credit), 'LN-CRE' (Commercial Real Estate Loan), "
+                        "'LN-EQP' (Equipment Loan)."
+                    ),
+                },
+                "customer_id": {
+                    "type": "string",
+                    "description": "Optional: the Meridian customerId, e.g. 'C001', to also check this specific customer's own decision history.",
+                },
+            },
+            "required": ["product_type_code"],
+        },
+    },
+    {
+        "name": "record_decision",
+        "description": (
+            "Persists a finished loan recommendation to Meridian's decision "
+            "history (the context graph), so it becomes precedent for future "
+            "loan-decision questions. Call this as your LAST tool call, once "
+            "you've reached a final recommendation -- not before."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "product_type_code": {
+                    "type": "string",
+                    "description": (
+                        "One of: 'LN-TERM', 'LN-SBA', 'LN-LOC', 'LN-CRE', 'LN-EQP'."
+                    ),
+                },
+                "requested_amount": {"type": "number", "description": "The requested loan amount."},
+                "recommendation": {
+                    "type": "string",
+                    "description": "One of: 'Approve', 'Decline', 'Escalate', 'Conditional Approve'.",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "A concise summary of why -- the key facts and policy rules that drove this recommendation.",
+                },
+                "applied_rule_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Policy rule IDs (e.g. 'POL-001') that were actually checked against this recommendation.",
+                },
+                "escalation_role": {
+                    "type": "string",
+                    "description": "If a policy rule required escalation, the role it was escalated to (e.g. 'Senior Underwriter' or 'Credit Risk Committee'). Omit if none.",
+                },
+            },
+            "required": ["customer_id", "product_type_code", "requested_amount", "recommendation", "reasoning"],
+        },
+    },
 ]
 
 
@@ -268,6 +355,8 @@ TOOL_STEP_LABELS = {
     "get_relationship_manager": "Checking relationship-manager coverage from virtual graph",
     "get_lending_policy": "Checking lending policy",
     "get_business_plan_details": "Reading business plan for loan request details",
+    "get_decision_history": "Checking decision history for precedent",
+    "record_decision": "Recording decision to context graph",
 }
 
 
@@ -394,6 +483,35 @@ def run_get_business_plan_details(session):
     }
 
 
+def run_get_decision_history(session, product_type_code, customer_id=None):
+    decisions = matching.fetch_decision_history(session, product_type_code, customer_id)
+    graph = graph_data.build_decision_delta(decisions, current_customer_id=customer_id)
+    return {"productTypeCode": product_type_code, "decisions": decisions, "graph": graph}
+
+
+def run_record_decision(
+    session, customer_id, product_type_code, requested_amount, recommendation, reasoning,
+    applied_rule_ids=None, escalation_role=None,
+):
+    customers = matching.fetch_meridian_customers(session)
+    customer_name = next((c["customerName"] for c in customers if c["customerId"] == customer_id), customer_id)
+    decision = {
+        "decisionId": f"DEC-{customer_id}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+        "customerId": customer_id,
+        "customerName": customer_name,
+        "productTypeCode": product_type_code,
+        "requestedAmount": requested_amount,
+        "recommendation": recommendation,
+        "reasoning": reasoning,
+        "appliedRuleIds": applied_rule_ids or [],
+        "escalationRole": escalation_role,
+        "decidedAt": datetime.date.today().isoformat(),
+    }
+    matching.record_decision(session, decision)
+    graph = graph_data.build_decision_delta([decision])
+    return {"decisionId": decision["decisionId"], "recorded": True, "graph": graph}
+
+
 def run_tool(name, tool_input, session):
     if name == "find_customer":
         return run_find_customer(session)
@@ -413,6 +531,14 @@ def run_tool(name, tool_input, session):
         return run_get_relationship_manager(session, tool_input["customer_id"])
     if name == "get_business_plan_details":
         return run_get_business_plan_details(session)
+    if name == "get_decision_history":
+        return run_get_decision_history(session, tool_input["product_type_code"], tool_input.get("customer_id"))
+    if name == "record_decision":
+        return run_record_decision(
+            session, tool_input["customer_id"], tool_input["product_type_code"],
+            tool_input["requested_amount"], tool_input["recommendation"], tool_input["reasoning"],
+            tool_input.get("applied_rule_ids"), tool_input.get("escalation_role"),
+        )
     return {"error": f"Unknown tool: {name}"}
 
 
