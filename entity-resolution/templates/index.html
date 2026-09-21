@@ -432,6 +432,14 @@
     // how the very first (upload) render already works.
     const graphNodesById = new Map();
     const graphEdgesByKey = new Map();
+    // Matches resolver/graph_data.py's _RISK_COLOR. A node earns this color
+    // by being flagged risky (e.g. a related company with a delinquent
+    // facility, from find_parent_companies) -- once flagged, it must stay
+    // flagged even if a later, unrelated tool call (e.g. get_decision_history
+    // pulling in that same company as precedent) re-touches the same node
+    // id with a plain, non-risk-aware stub. Without this guard, whichever
+    // tool happens to run last silently erases the risk flag.
+    const RISK_COLOR = '#D6483F';
 
     const uploadBtn = document.getElementById('upload-btn');
     const graphContainer = document.getElementById('graph');
@@ -485,6 +493,12 @@
     function mergeGraphData(delta) {
       if (!delta) return;
       for (const node of delta.nodes || []) {
+        const existing = graphNodesById.get(node.id);
+        // Never let a later, non-risk update downgrade a node that's
+        // already flagged risky -- see the RISK_COLOR comment above.
+        if (existing && existing.color === RISK_COLOR && node.color !== RISK_COLOR) {
+          continue;
+        }
         graphNodesById.set(node.id, node);
       }
       for (const edge of delta.edges || []) {
@@ -760,6 +774,11 @@
 
       const thinking = addThinkingMessage();
       let handled = false;
+      // Once the model starts producing its own text (typically only the
+      // final, non-tool-use round), `thinking` is repurposed in place into
+      // a live-updating answer bubble instead of sitting frozen for
+      // whatever a thinking-heavy round takes -- 10-20s+ is common.
+      let streamedText = '';
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
@@ -799,6 +818,13 @@
             if (!event) continue;
 
             if (event.type === 'step') {
+              // A round that streamed some text (rare -- usually a short
+              // preamble) turned out to call a tool after all. Drop that
+              // partial text and go back to the plain step-label display.
+              if (streamedText) {
+                streamedText = '';
+                thinking.classList.add('thinking');
+              }
               // Real progress: this tool call just actually finished
               // server-side, right now -- not a replay.
               thinking.textContent = event.label;
@@ -807,10 +833,22 @@
                 renderGraph();
               }
               appendTraceSteps([event]);
+            } else if (event.type === 'text_delta') {
+              // The model's own answer, typed out as it's actually
+              // generated -- not sent as one blob once the whole (often
+              // 10-20s+) round finishes. Plain text while streaming so a
+              // mid-token markdown fragment (e.g. an unclosed "**") never
+              // renders broken; 'done' below swaps in the fully-parsed
+              // markdown once the text is complete.
+              thinking.classList.remove('thinking');
+              streamedText += event.text;
+              thinking.textContent = streamedText;
+              chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (event.type === 'done') {
               handled = true;
-              thinking.remove();
-              addMessage('assistant', event.reply || '(no response)');
+              thinking.classList.remove('thinking');
+              thinking.innerHTML = DOMPurify.sanitize(marked.parse(event.reply || '(no response)'));
+              chatMessages.scrollTop = chatMessages.scrollHeight;
               if (event.graph && event.graph.nodes && event.graph.nodes.length) {
                 mergeGraphData(event.graph);
                 renderGraph();

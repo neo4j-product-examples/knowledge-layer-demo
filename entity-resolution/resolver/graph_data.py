@@ -404,6 +404,40 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
     return {"nodes": nodes, "edges": edges}
 
 
+def build_policy_failure_delta(customer_id, failed_rules):
+    """Graph delta flagging which policy rules the customer's actual
+    figures FAILED against (record_decision) -- get_lending_policy only
+    reveals the rules that were checked, not the verdict, so a rule the
+    applicant fails (e.g. loan-to-cash-flow) never showed up any
+    differently on the canvas than one they passed. Reuses the same
+    policy:<ruleId> node id build_lending_policy_delta already put on
+    screen, recoloring it red in place rather than adding an unrelated
+    second node, plus a direct customer -> rule edge so the failure is
+    visually obvious without having to trace back through the section."""
+    if not failed_rules:
+        return {"nodes": [], "edges": []}
+
+    nodes = [_customer_stub_node(customer_id)]
+    edges = []
+    for rule in failed_rules:
+        rule_node_id = _node_id("policy", rule["ruleId"])
+        nodes.append({
+            "id": rule_node_id,
+            "label": f"{rule['ruleId']}: {rule.get('criterion')} (Failed)",
+            "group": "policy",
+            "color": _RISK_COLOR,
+            "componentId": None,
+        })
+        edges.append({
+            "from": _node_id("meridian", customer_id),
+            "to": rule_node_id,
+            "label": "FAILS_POLICY",
+            "title": "FAILS_POLICY",
+            "dashes": False,
+        })
+    return {"nodes": nodes, "edges": edges}
+
+
 def build_decision_delta(decisions, current_customer_id=None):
     """Graph delta revealing past loan decisions from the context constituent
     (get_decision_history / record_decision). Each Decision connects to a

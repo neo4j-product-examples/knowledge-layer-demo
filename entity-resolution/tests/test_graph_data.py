@@ -285,6 +285,28 @@ def test_build_lending_policy_delta_handles_no_rules():
     assert delta == {"nodes": [], "edges": []}
 
 
+def test_build_policy_failure_delta_flags_failed_rule_red():
+    failed_rules = [
+        {"ruleId": "POL-003", "criterion": "Maximum Loan Amount to Annual Cash Flow"},
+    ]
+
+    delta = graph_data.build_policy_failure_delta("C001", failed_rules)
+
+    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
+    assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
+    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._RISK_COLOR
+    assert "Failed" in nodes_by_id["policy:POL-003"]["label"]
+
+    edges = {(e["from"], e["to"], e["label"]) for e in delta["edges"]}
+    assert ("meridian:C001", "policy:POL-003", "FAILS_POLICY") in edges
+
+
+def test_build_policy_failure_delta_handles_no_failed_rules():
+    delta = graph_data.build_policy_failure_delta("C001", [])
+
+    assert delta == {"nodes": [], "edges": []}
+
+
 def test_build_decision_delta_connects_each_decision_to_its_own_customer():
     decisions = [
         {

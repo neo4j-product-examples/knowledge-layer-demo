@@ -39,7 +39,11 @@ def get_driver():
 def get_anthropic_client():
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic()
+        # Default timeout is 10 minutes -- a stalled streaming connection
+        # would otherwise hang the whole (single-threaded dev server)
+        # request silently for that long before the SDK gives up and lets
+        # our except block turn it into a normal "error" SSE event.
+        _anthropic_client = anthropic.Anthropic(timeout=60.0)
     return _anthropic_client
 
 
@@ -211,11 +215,11 @@ def chat():
 
     Streams as Server-Sent Events so each tool result reaches the client
     the instant it actually completes -- the graph/tool-call-trace update in
-    real time during the ~10-15s of tool calls, instead of the whole
-    request finishing (tool calls AND the final answer, ~30-45s total)
-    before anything is sent and the client faking a replay of steps that
-    already happened. The final answer itself is still sent as one blob
-    once the model finishes composing it, not streamed token-by-token."""
+    real time during the ~10-15s of tool calls. The model's own text is
+    also streamed token-by-token as it's generated (via client.messages.
+    stream()/text_stream), not sent as one blob at the end -- a
+    thinking-heavy final round can take 10-20s+ on its own, and that's
+    dead air unless the answer is visibly typing out during it."""
     body = request.get_json(silent=True) or {}
     user_message = (body.get("message") or "").strip()
     if not user_message:
@@ -232,13 +236,22 @@ def chat():
         try:
             with db.get_session(get_driver()) as session:
                 for _ in range(MAX_TOOL_ITERATIONS):
-                    response = client.messages.create(
+                    with client.messages.stream(
                         model=CHAT_MODEL,
-                        max_tokens=4096,
+                        # A round's adaptive-thinking tokens count against
+                        # this budget too -- a heavy-thinking round
+                        # drafting a full record_decision reasoning string
+                        # can blow past 4096 combined and get cut off
+                        # mid-tool-call (stop_reason="max_tokens" with no
+                        # completed text or tool_use block to act on).
+                        max_tokens=8192,
                         system=chat_tools.SYSTEM_PROMPT,
                         tools=chat_tools.TOOLS,
                         messages=_chat_history,
-                    )
+                    ) as stream:
+                        for text in stream.text_stream:
+                            yield _sse_event({"type": "text_delta", "text": text})
+                        response = stream.get_final_message()
                     _chat_history.append({"role": "assistant", "content": response.content})
 
                     if response.stop_reason != "tool_use":
