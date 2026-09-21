@@ -463,7 +463,8 @@ def fetch_decision_history(session, product_type_code, customer_id=None):
                d.customerName AS customerName, d.productTypeCode AS productTypeCode,
                d.requestedAmount AS requestedAmount, d.recommendation AS recommendation,
                d.reasoning AS reasoning, d.appliedRuleIds AS appliedRuleIds,
-               d.escalationRole AS escalationRole, d.decidedAt AS decidedAt
+               d.escalationRole AS escalationRole, d.failedRuleIds AS failedRuleIds,
+               d.decidedAt AS decidedAt
         ORDER BY d.decidedAt DESC
         """,
         productTypeCode=product_type_code, customerId=customer_id,
@@ -499,7 +500,7 @@ def record_decision(session, decision):
             d.productTypeCode = $productTypeCode, d.requestedAmount = $requestedAmount,
             d.recommendation = $recommendation, d.reasoning = $reasoning,
             d.appliedRuleIds = $appliedRuleIds, d.escalationRole = $escalationRole,
-            d.decidedAt = $decidedAt
+            d.failedRuleIds = $failedRuleIds, d.decidedAt = $decidedAt
         """,
         **decision,
     )

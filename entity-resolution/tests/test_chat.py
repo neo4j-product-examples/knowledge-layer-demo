@@ -410,3 +410,42 @@ def test_merge_graph_deltas_skips_none_entries():
     merged = chat.merge_graph_deltas([None, {"nodes": [{"id": "a"}], "edges": []}])
 
     assert merged["nodes"] == [{"id": "a"}]
+
+
+def test_run_record_decision_flags_failed_rule_on_graph(fake_session):
+    fake_session.when("c.customerType AS customerType", [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}])
+    fake_session.when(
+        "r.ruleId AS ruleId, r.criterion",
+        [
+            {
+                "documentTitle": "Meridian Commercial Lending Policy Manual", "documentVersion": "3.2",
+                "sectionNumber": "§4", "sectionTitle": "Term Loans",
+                "ruleId": "POL-003", "criterion": "Maximum Loan Amount to Annual Cash Flow",
+                "comparison": "<=", "threshold": 3.5, "unit": "ratio", "section": "§4.3", "description": "...",
+                "escalationRole": None, "escalationTrigger": None, "escalationRequiredAction": None,
+            },
+        ],
+    )
+
+    result = chat.run_record_decision(
+        fake_session, "C001", "LN-TERM", 400000, "Decline", "Exceeds loan-to-cash-flow cap.",
+        applied_rule_ids=["POL-001", "POL-003"], failed_rule_ids=["POL-003"],
+    )
+
+    assert result["recorded"] is True
+    nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
+    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._RISK_COLOR
+    edges = {(e["from"], e["to"], e["label"]) for e in result["graph"]["edges"]}
+    assert ("meridian:C001", "policy:POL-003", "FAILS_POLICY") in edges
+
+
+def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_session):
+    fake_session.when("c.customerType AS customerType", [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}])
+
+    result = chat.run_record_decision(
+        fake_session, "C001", "LN-TERM", 400000, "Approve", "Clears every rule.",
+        applied_rule_ids=["POL-001", "POL-002"],
+    )
+
+    assert not any(n["id"].startswith("policy:") for n in result["graph"]["nodes"])
+    assert not any("r.ruleId AS ruleId, r.criterion" in call[0] for call in fake_session.calls)

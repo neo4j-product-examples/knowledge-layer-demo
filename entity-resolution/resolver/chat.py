@@ -35,6 +35,15 @@ affiliates, related entities, or common ownership, you must call
 find_parent_companies for this customer to check them -- do not assume the
 applicant's own facilities are the only ones that rule applies to.
 
+Your final written answer for a loan recommendation must ALWAYS include, in that
+same answer, a markdown table with one row per policy rule you checked: the rule
+ID, its threshold, the applicant's actual figure, and whether it passed or failed.
+This table is mandatory every single time you give a recommendation, no matter how
+short the rest of the answer is -- "be concise" means cut filler elsewhere, not
+this table. Never write "see the table above" or point to a breakdown that isn't
+present in this exact response; if you haven't actually written the table in your
+answer yet, write it now before you finish.
+
 Also call get_decision_history for the applicable product type (and this customer_id)
 to check precedent -- has the bank approved, declined, or escalated similar loans
 before, and why. Ground your recommendation in that history where it's relevant
@@ -50,6 +59,13 @@ reasoning summary (including the policy rule IDs that actually drove it) as your
 very last tool call, so it becomes part of the bank's decision history for future
 questions. Only skip it for questions that don't reach a specific recommendation
 (e.g. pulling up a customer's credit score with no ask about approving anything).
+
+Of the policy rule IDs you cite in applied_rule_ids, also pass the ones the
+applicant's actual figures FAILED against (not just the ones that happened to
+matter) as failed_rule_ids -- e.g. if the requested amount exceeds the max
+loan-to-cash-flow ratio, that rule's ID goes in failed_rule_ids, not just
+applied_rule_ids. Without this, a rule the applicant failed looks identical on
+the graph to one they passed, which defeats the point of showing your work.
 
 get_business_plan_details is the applicant's own account of the loan (their stated
 use of proceeds, market and repayment rationale) -- it is not Meridian's system of
@@ -260,6 +276,11 @@ TOOLS = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Policy rule IDs (e.g. 'POL-001') that were actually checked against this recommendation.",
+                },
+                "failed_rule_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Of applied_rule_ids, the ones the applicant's actual figures FAILED against (e.g. loan-to-cash-flow over the cap) -- not just cited or passed. This is what flags the failing rule red on the graph, so leave it out (or empty) if every applied rule passed.",
                 },
                 "escalation_role": {
                     "type": "string",
@@ -491,7 +512,7 @@ def run_get_decision_history(session, product_type_code, customer_id=None):
 
 def run_record_decision(
     session, customer_id, product_type_code, requested_amount, recommendation, reasoning,
-    applied_rule_ids=None, escalation_role=None,
+    applied_rule_ids=None, escalation_role=None, failed_rule_ids=None,
 ):
     customers = matching.fetch_meridian_customers(session)
     customer_name = next((c["customerName"] for c in customers if c["customerId"] == customer_id), customer_id)
@@ -505,10 +526,22 @@ def run_record_decision(
         "reasoning": reasoning,
         "appliedRuleIds": applied_rule_ids or [],
         "escalationRole": escalation_role,
+        "failedRuleIds": failed_rule_ids or [],
         "decidedAt": datetime.date.today().isoformat(),
     }
     matching.record_decision(session, decision)
     graph = graph_data.build_decision_delta([decision])
+
+    if failed_rule_ids:
+        # get_lending_policy only ever showed the rules that were CHECKED,
+        # never the verdict -- this is what actually turns a failing rule
+        # red on the canvas, in place, rather than leaving every rule
+        # looking identical regardless of whether the applicant cleared it.
+        all_rules = matching.fetch_lending_policy_rules(session, product_type_code)
+        failed_rules = [r for r in all_rules if r["ruleId"] in failed_rule_ids]
+        failure_graph = graph_data.build_policy_failure_delta(customer_id, failed_rules)
+        graph = merge_graph_deltas([graph, failure_graph])
+
     return {"decisionId": decision["decisionId"], "recorded": True, "graph": graph}
 
 
@@ -538,6 +571,7 @@ def run_tool(name, tool_input, session):
             session, tool_input["customer_id"], tool_input["product_type_code"],
             tool_input["requested_amount"], tool_input["recommendation"], tool_input["reasoning"],
             tool_input.get("applied_rule_ids"), tool_input.get("escalation_role"),
+            tool_input.get("failed_rule_ids"),
         )
     return {"error": f"Unknown tool: {name}"}
 

@@ -432,6 +432,14 @@
     // how the very first (upload) render already works.
     const graphNodesById = new Map();
     const graphEdgesByKey = new Map();
+    // Matches resolver/graph_data.py's _RISK_COLOR. A node earns this color
+    // by being flagged risky (e.g. a related company with a delinquent
+    // facility, from find_parent_companies) -- once flagged, it must stay
+    // flagged even if a later, unrelated tool call (e.g. get_decision_history
+    // pulling in that same company as precedent) re-touches the same node
+    // id with a plain, non-risk-aware stub. Without this guard, whichever
+    // tool happens to run last silently erases the risk flag.
+    const RISK_COLOR = '#D6483F';
 
     const uploadBtn = document.getElementById('upload-btn');
     const graphContainer = document.getElementById('graph');
@@ -485,6 +493,12 @@
     function mergeGraphData(delta) {
       if (!delta) return;
       for (const node of delta.nodes || []) {
+        const existing = graphNodesById.get(node.id);
+        // Never let a later, non-risk update downgrade a node that's
+        // already flagged risky -- see the RISK_COLOR comment above.
+        if (existing && existing.color === RISK_COLOR && node.color !== RISK_COLOR) {
+          continue;
+        }
         graphNodesById.set(node.id, node);
       }
       for (const edge of delta.edges || []) {
@@ -496,14 +510,19 @@
     // this build (isLayoutMoving() stays false and nodes sit wherever they're
     // given, including all stacked at (0,0) if no x/y is provided) -- so we
     // compute a simple force-directed layout ourselves and pass NVL the
-    // final positions, which it does render faithfully.
-    //
-    // NVL itself still gets destroyed and rebuilt on every render (its own
-    // addAndUpdateElementsInGraph doesn't reliably apply a new node's color
-    // -- see the comment on renderGraph), but positions persist here across
-    // calls and existing nodes are never moved once placed, so rebuilding
-    // reads as "a node was added" rather than the whole graph reshuffling.
+    // final positions, which it does render faithfully. Positions persist
+    // here across calls and existing nodes are never moved once placed, so
+    // adding a node reads as "a node was added" rather than the whole graph
+    // reshuffling.
     const nodePositions = new Map();
+    // The color NVL was last told about for each node id. A node already on
+    // screen (already in nodePositions) is normally left out of the payload
+    // sent to NVL entirely -- but if its color in graphNodesById has since
+    // changed (e.g. find_parent_companies flags a company red that an
+    // earlier, unrelated tool call already put on canvas in the plain
+    // color), that update has to be resent explicitly, or the node just
+    // stays whatever color it was first painted forever.
+    const nodeColorsById = new Map();
 
     function layoutNodes(nodes, edges) {
       const newNodeIds = new Set();
@@ -637,6 +656,7 @@
         // a drag interaction uses internally, so calling it here forces
         // that redraw immediately.
         nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+        for (const n of nodeList) nodeColorsById.set(n.id, n.color);
         requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
         return;
       }
@@ -652,13 +672,27 @@
         const start = flyInStarts.get(id);
         return { id, caption: node.label, color: node.color, size: 20, x: start.x, y: start.y };
       });
-      if (newNodePayload.length || newEdgePayload.length) {
-        // Add new elements onto the SAME live instance instead of
+      // A node that's already on screen (already has a position) is
+      // normally skipped entirely -- but if a later tool call recolored it
+      // in graphNodesById (e.g. flagging a company red after an earlier,
+      // unrelated tool call already painted it in the plain color), that
+      // has to be pushed to NVL explicitly too, at its current resting
+      // position, or the canvas just never reflects it.
+      const recoloredPayload = nodeList
+        .filter(n => !newNodeIds.has(n.id) && nodeColorsById.get(n.id) !== n.color)
+        .map(n => {
+          const pos = nodePositions.get(n.id);
+          return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+        });
+      const updatePayload = newNodePayload.concat(recoloredPayload);
+      if (updatePayload.length || newEdgePayload.length) {
+        // Add new/changed elements onto the SAME live instance instead of
         // destroying and rebuilding NVL -- setNodePositions on an existing
         // instance costs well under 1ms per call (measured), versus a full
         // rebuild's real WebGL teardown/recreate cost, which is what made
         // the previous destroy-per-frame animation look choppy.
-        nvl.addAndUpdateElementsInGraph(newNodePayload, newEdgePayload);
+        nvl.addAndUpdateElementsInGraph(updatePayload, newEdgePayload);
+        for (const n of updatePayload) nodeColorsById.set(n.id, n.color);
       }
 
       const FRAMES = newNodeIds.size ? 12 : 1;
@@ -760,6 +794,11 @@
 
       const thinking = addThinkingMessage();
       let handled = false;
+      // Once the model starts producing its own text (typically only the
+      // final, non-tool-use round), `thinking` is repurposed in place into
+      // a live-updating answer bubble instead of sitting frozen for
+      // whatever a thinking-heavy round takes -- 10-20s+ is common.
+      let streamedText = '';
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
@@ -799,6 +838,13 @@
             if (!event) continue;
 
             if (event.type === 'step') {
+              // A round that streamed some text (rare -- usually a short
+              // preamble) turned out to call a tool after all. Drop that
+              // partial text and go back to the plain step-label display.
+              if (streamedText) {
+                streamedText = '';
+                thinking.classList.add('thinking');
+              }
               // Real progress: this tool call just actually finished
               // server-side, right now -- not a replay.
               thinking.textContent = event.label;
@@ -807,10 +853,22 @@
                 renderGraph();
               }
               appendTraceSteps([event]);
+            } else if (event.type === 'text_delta') {
+              // The model's own answer, typed out as it's actually
+              // generated -- not sent as one blob once the whole (often
+              // 10-20s+) round finishes. Plain text while streaming so a
+              // mid-token markdown fragment (e.g. an unclosed "**") never
+              // renders broken; 'done' below swaps in the fully-parsed
+              // markdown once the text is complete.
+              thinking.classList.remove('thinking');
+              streamedText += event.text;
+              thinking.textContent = streamedText;
+              chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (event.type === 'done') {
               handled = true;
-              thinking.remove();
-              addMessage('assistant', event.reply || '(no response)');
+              thinking.classList.remove('thinking');
+              thinking.innerHTML = DOMPurify.sanitize(marked.parse(event.reply || '(no response)'));
+              chatMessages.scrollTop = chatMessages.scrollHeight;
               if (event.graph && event.graph.nodes && event.graph.nodes.length) {
                 mergeGraphData(event.graph);
                 renderGraph();
