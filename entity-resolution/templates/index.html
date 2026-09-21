@@ -510,14 +510,19 @@
     // this build (isLayoutMoving() stays false and nodes sit wherever they're
     // given, including all stacked at (0,0) if no x/y is provided) -- so we
     // compute a simple force-directed layout ourselves and pass NVL the
-    // final positions, which it does render faithfully.
-    //
-    // NVL itself still gets destroyed and rebuilt on every render (its own
-    // addAndUpdateElementsInGraph doesn't reliably apply a new node's color
-    // -- see the comment on renderGraph), but positions persist here across
-    // calls and existing nodes are never moved once placed, so rebuilding
-    // reads as "a node was added" rather than the whole graph reshuffling.
+    // final positions, which it does render faithfully. Positions persist
+    // here across calls and existing nodes are never moved once placed, so
+    // adding a node reads as "a node was added" rather than the whole graph
+    // reshuffling.
     const nodePositions = new Map();
+    // The color NVL was last told about for each node id. A node already on
+    // screen (already in nodePositions) is normally left out of the payload
+    // sent to NVL entirely -- but if its color in graphNodesById has since
+    // changed (e.g. find_parent_companies flags a company red that an
+    // earlier, unrelated tool call already put on canvas in the plain
+    // color), that update has to be resent explicitly, or the node just
+    // stays whatever color it was first painted forever.
+    const nodeColorsById = new Map();
 
     function layoutNodes(nodes, edges) {
       const newNodeIds = new Set();
@@ -651,6 +656,7 @@
         // a drag interaction uses internally, so calling it here forces
         // that redraw immediately.
         nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
+        for (const n of nodeList) nodeColorsById.set(n.id, n.color);
         requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
         return;
       }
@@ -666,13 +672,27 @@
         const start = flyInStarts.get(id);
         return { id, caption: node.label, color: node.color, size: 20, x: start.x, y: start.y };
       });
-      if (newNodePayload.length || newEdgePayload.length) {
-        // Add new elements onto the SAME live instance instead of
+      // A node that's already on screen (already has a position) is
+      // normally skipped entirely -- but if a later tool call recolored it
+      // in graphNodesById (e.g. flagging a company red after an earlier,
+      // unrelated tool call already painted it in the plain color), that
+      // has to be pushed to NVL explicitly too, at its current resting
+      // position, or the canvas just never reflects it.
+      const recoloredPayload = nodeList
+        .filter(n => !newNodeIds.has(n.id) && nodeColorsById.get(n.id) !== n.color)
+        .map(n => {
+          const pos = nodePositions.get(n.id);
+          return { id: n.id, caption: n.label, color: n.color, size: 20, x: pos.x, y: pos.y };
+        });
+      const updatePayload = newNodePayload.concat(recoloredPayload);
+      if (updatePayload.length || newEdgePayload.length) {
+        // Add new/changed elements onto the SAME live instance instead of
         // destroying and rebuilding NVL -- setNodePositions on an existing
         // instance costs well under 1ms per call (measured), versus a full
         // rebuild's real WebGL teardown/recreate cost, which is what made
         // the previous destroy-per-frame animation look choppy.
-        nvl.addAndUpdateElementsInGraph(newNodePayload, newEdgePayload);
+        nvl.addAndUpdateElementsInGraph(updatePayload, newEdgePayload);
+        for (const n of updatePayload) nodeColorsById.set(n.id, n.color);
       }
 
       const FRAMES = newNodeIds.size ? 12 : 1;
