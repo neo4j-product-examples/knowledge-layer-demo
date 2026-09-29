@@ -491,7 +491,16 @@ def clear_customer_decisions(session, customer_id):
 def record_decision(session, decision):
     """Persists one recommendation to the context constituent (MERGE on
     decisionId, so re-recording the same decisionId updates it in place
-    rather than duplicating)."""
+    rather than duplicating).
+
+    Also materializes real ABOUT and APPLIED_POLICY relationships to
+    Customer/PolicyRule nodes living inside `context` itself -- composite
+    databases forbid relationships that cross constituents, so these are
+    lightweight shadow copies (just the id and a display field, nothing
+    sensitive), not references into meridian or lendingpolicy directly.
+    decision's optional "appliedRules" key is a list of {ruleId, criterion,
+    failed} dicts (see chat.run_record_decision) -- without it, only the
+    Decision node and its ABOUT edge are written."""
     session.run(
         """
         USE meridianComposite.context
@@ -501,9 +510,26 @@ def record_decision(session, decision):
             d.recommendation = $recommendation, d.reasoning = $reasoning,
             d.appliedRuleIds = $appliedRuleIds, d.escalationRole = $escalationRole,
             d.failedRuleIds = $failedRuleIds, d.decidedAt = $decidedAt
+        MERGE (c:Customer {customerId: $customerId})
+        SET c.customerName = $customerName
+        MERGE (d)-[:ABOUT]->(c)
         """,
         **decision,
     )
+    applied_rules = decision.get("appliedRules") or []
+    if applied_rules:
+        session.run(
+            """
+            USE meridianComposite.context
+            MATCH (d:Decision {decisionId: $decisionId})
+            UNWIND $appliedRules AS rule
+            MERGE (r:PolicyRule {ruleId: rule.ruleId})
+            SET r.criterion = rule.criterion
+            MERGE (d)-[rel:APPLIED_POLICY]->(r)
+            SET rel.failed = rule.failed
+            """,
+            decisionId=decision["decisionId"], appliedRules=applied_rules,
+        )
 
 
 def fetch_document_ownership(session):

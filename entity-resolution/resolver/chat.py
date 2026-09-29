@@ -532,6 +532,24 @@ def run_record_decision(
 ):
     customers = matching.fetch_meridian_customers(session)
     customer_name = next((c["customerName"] for c in customers if c["customerId"] == customer_id), customer_id)
+    applied_rule_ids = applied_rule_ids or []
+    failed_rule_ids = failed_rule_ids or []
+
+    # Fetched once, whether or not anything failed: needed both for the
+    # failure-node graph delta below and for the criterion text on each
+    # shadow PolicyRule node record_decision writes a real APPLIED_POLICY
+    # edge to.
+    all_rules = matching.fetch_lending_policy_rules(session, product_type_code) if applied_rule_ids else []
+    rules_by_id = {r["ruleId"]: r for r in all_rules}
+    applied_rules = [
+        {
+            "ruleId": rule_id,
+            "criterion": (rules_by_id.get(rule_id) or {}).get("criterion") or rule_id,
+            "failed": rule_id in failed_rule_ids,
+        }
+        for rule_id in applied_rule_ids
+    ]
+
     decision = {
         "decisionId": f"DEC-{customer_id}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
         "customerId": customer_id,
@@ -540,9 +558,10 @@ def run_record_decision(
         "requestedAmount": requested_amount,
         "recommendation": recommendation,
         "reasoning": reasoning,
-        "appliedRuleIds": applied_rule_ids or [],
+        "appliedRuleIds": applied_rule_ids,
         "escalationRole": escalation_role,
-        "failedRuleIds": failed_rule_ids or [],
+        "failedRuleIds": failed_rule_ids,
+        "appliedRules": applied_rules,
         "decidedAt": datetime.date.today().isoformat(),
     }
     matching.record_decision(session, decision)
@@ -553,7 +572,6 @@ def run_record_decision(
         # never the verdict -- this is what actually turns a failing rule
         # red on the canvas, in place, rather than leaving every rule
         # looking identical regardless of whether the applicant cleared it.
-        all_rules = matching.fetch_lending_policy_rules(session, product_type_code)
         failed_rules = [r for r in all_rules if r["ruleId"] in failed_rule_ids]
         failure_graph = graph_data.build_policy_failure_delta(customer_id, failed_rules)
         graph = merge_graph_deltas([graph, failure_graph])

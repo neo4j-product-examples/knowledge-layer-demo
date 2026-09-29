@@ -10,11 +10,17 @@ runtime by the `record_decision` chat tool, not by this script.
     (:Decision {decisionId, customerId, customerName, productTypeCode,
                 requestedAmount, recommendation, reasoning, appliedRuleIds,
                 failedRuleIds, escalationRole, decidedAt})
+        -[:ABOUT]-> (:Customer {customerId, customerName})
+        -[:APPLIED_POLICY {failed}]-> (:PolicyRule {ruleId, criterion})
 
-No native relationship to the customer -- composite databases forbid
-relationships that span constituents, so customerId/customerName are just
-properties here; the app draws the visual link to a Customer stub node at
-render time (see graph_data.build_decision_delta).
+Composite databases forbid relationships that span constituents, so the
+Customer and PolicyRule nodes above are lightweight shadow copies living
+inside `context` itself (same pattern used for shadowDb), not references
+into meridian or lendingpolicy directly -- but the ABOUT and APPLIED_POLICY
+edges themselves are real, native relationships, not just properties. The
+app also still draws a visual link at render time for its own graph pane
+(see graph_data.build_decision_delta); that's a separate, UI-only concern
+from the persisted schema here.
 
 All writes are MERGE-based on decisionId, so this is safe to re-run.
 
@@ -175,8 +181,50 @@ with db.get_session(driver) as session:
             d.recommendation = row.recommendation, d.reasoning = row.reasoning,
             d.appliedRuleIds = row.appliedRuleIds, d.escalationRole = row.escalationRole,
             d.failedRuleIds = row.failedRuleIds, d.decidedAt = row.decidedAt
+        MERGE (c:Customer {customerId: row.customerId})
+        SET c.customerName = row.customerName
+        MERGE (d)-[:ABOUT]->(c)
         """,
         rows=DECISIONS,
+    )
+
+    # Real APPLIED_POLICY edges to shadow PolicyRule nodes living inside
+    # `context` itself (same shadow-node pattern used for shadowDb) --
+    # composite databases forbid relationships that cross into the
+    # separate lendingpolicy constituent, so this is a lightweight copy
+    # (just ruleId + criterion), not a reference into it directly. Pull
+    # the real criterion text from lendingpolicy so these shadow nodes
+    # aren't just bare rule IDs.
+    rule_rows = session.run(
+        """
+        USE meridianComposite.lendingpolicy
+        MATCH (r:PolicyRule)
+        RETURN r.ruleId AS ruleId, r.criterion AS criterion
+        """
+    )
+    criterion_by_rule_id = {row["ruleId"]: row["criterion"] for row in rule_rows}
+
+    applied_policy_rows = [
+        {
+            "decisionId": decision["decisionId"],
+            "ruleId": rule_id,
+            "criterion": criterion_by_rule_id.get(rule_id, rule_id),
+            "failed": rule_id in decision["failedRuleIds"],
+        }
+        for decision in DECISIONS
+        for rule_id in decision["appliedRuleIds"]
+    ]
+    session.run(
+        """
+        USE meridianComposite.context
+        UNWIND $rows AS row
+        MATCH (d:Decision {decisionId: row.decisionId})
+        MERGE (r:PolicyRule {ruleId: row.ruleId})
+        SET r.criterion = row.criterion
+        MERGE (d)-[rel:APPLIED_POLICY]->(r)
+        SET rel.failed = row.failed
+        """,
+        rows=applied_policy_rows,
     )
 
     result = session.run(

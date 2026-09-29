@@ -441,6 +441,13 @@ def test_run_record_decision_flags_failed_rule_on_graph(fake_session):
 
 def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_session):
     fake_session.when("c.customerType AS customerType", [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}])
+    fake_session.when(
+        "r.ruleId AS ruleId, r.criterion",
+        [
+            {"ruleId": "POL-001", "criterion": "Minimum Credit Score"},
+            {"ruleId": "POL-002", "criterion": "Minimum Debt Service Coverage Ratio"},
+        ],
+    )
 
     result = chat.run_record_decision(
         fake_session, "C001", "LN-TERM", 400000, "Approve", "Clears every rule.",
@@ -448,4 +455,11 @@ def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_sess
     )
 
     assert not any(n["id"].startswith("policy:") for n in result["graph"]["nodes"])
-    assert not any("r.ruleId AS ruleId, r.criterion" in call[0] for call in fake_session.calls)
+    # Even with nothing failing, criterion text is still fetched -- it's
+    # needed for the real APPLIED_POLICY shadow-node edges record_decision
+    # writes for every applied rule, not just failed ones.
+    applied_policy_calls = [c for c in fake_session.calls if "APPLIED_POLICY" in c[0]]
+    assert len(applied_policy_calls) == 1
+    written_rules = {r["ruleId"]: r for r in applied_policy_calls[0][1]["appliedRules"]}
+    assert written_rules["POL-001"]["criterion"] == "Minimum Credit Score"
+    assert written_rules["POL-001"]["failed"] is False
