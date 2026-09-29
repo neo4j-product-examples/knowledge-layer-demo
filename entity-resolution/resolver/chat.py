@@ -45,26 +45,21 @@ present in this exact response; if you haven't actually written the table in you
 answer yet, write it now before you finish.
 
 Also call get_decision_history for the applicable product type (and this customer_id)
-to check precedent -- has the bank approved, declined, or escalated similar loans
-before, and why. Ground your recommendation in that history where it's relevant
-(e.g. "consistent with how we handled a similar term loan for X") rather than
-reasoning about this application as if it were the first one ever made.
+to get a general sense of history before you reach a recommendation -- has this
+customer been seen before, what's the overall pattern for this product type. This
+is a broad browse, not precedent citation: it returns every decision of that
+product type, not just comparable ones, so don't cite anything from it directly
+in your final answer or call it "precedent" yourself.
 
-get_decision_history returns every decision of that product type, not just
-comparable ones -- a clean approval where every rule passed is NOT precedent for
-a case where a rule is failing, and citing it as if it were is misleading, not
-thorough. Only call a decision "precedent" for this case if it's actually
-analogous: it failed (or passed) the SAME rule this case turns on, or reached the
-same kind of outcome under a similar circumstance. If the tool returns unrelated
-decisions, leave them out of the precedent table entirely rather than including
-every result just because the tool returned it.
-
-Whenever at least one genuinely comparable precedent exists, your final answer
-must ALWAYS include, in that same answer, a markdown table listing each one:
-decision ID, customer, recommendation, and the policy rule(s) that drove it
-(applied and, if any, failed). Same rule as the policy-check table above -- don't
-just mention a precedent in prose or point to a table that isn't in this response;
-write it out, every time relevant precedent exists.
+Real precedent is discovered and cited automatically, not by your judgment: once
+you call record_decision with failed_rule_ids, the system finds every prior
+decision that failed the exact same policy rule and links it to this one as real,
+persisted precedent. record_decision's result includes a "precedentTable" field
+(already formatted as a markdown table) whenever that search found something. If
+it's non-empty, paste it into your final answer verbatim under its own "Precedent"
+heading -- don't reformat it, summarize it away, or write your own precedent table
+instead. If it's empty, there is no precedent for this case; say so plainly rather
+than reaching into the broad get_decision_history browse for something to cite.
 
 Whenever you state a specific recommendation (approve/decline/escalate/conditional)
 for a specific loan, you MUST call record_decision immediately before writing your
@@ -265,9 +260,12 @@ TOOLS = [
         "name": "record_decision",
         "description": (
             "Persists a finished loan recommendation to Meridian's decision "
-            "history (the context graph), so it becomes precedent for future "
-            "loan-decision questions. Call this as your LAST tool call, once "
-            "you've reached a final recommendation -- not before."
+            "history (the context graph). Also automatically finds every prior "
+            "decision that failed the same policy rule(s) as failed_rule_ids and "
+            "links this one to them as real precedent -- the result's "
+            "precedentTable field is a ready-made markdown table of what was "
+            "found (empty string if nothing was). Call this as your LAST tool "
+            "call, once you've reached a final recommendation -- not before."
         ),
         "input_schema": {
             "type": "object",
@@ -564,7 +562,7 @@ def run_record_decision(
         "appliedRules": applied_rules,
         "decidedAt": datetime.date.today().isoformat(),
     }
-    matching.record_decision(session, decision)
+    precedents = matching.record_decision(session, decision)
     graph = graph_data.build_decision_delta([decision])
 
     if failed_rule_ids:
@@ -576,7 +574,32 @@ def run_record_decision(
         failure_graph = graph_data.build_policy_failure_delta(customer_id, failed_rules)
         graph = merge_graph_deltas([graph, failure_graph])
 
-    return {"decisionId": decision["decisionId"], "recorded": True, "graph": graph}
+    if precedents:
+        precedent_graph = graph_data.build_precedent_delta(decision, precedents)
+        graph = merge_graph_deltas([graph, precedent_graph])
+
+    return {
+        "decisionId": decision["decisionId"],
+        "recorded": True,
+        "graph": graph,
+        # A precedent is now discovered and persisted deterministically
+        # (a real PRECEDENT_FOR edge to any prior decision that failed the
+        # exact same rule), not judged by the model -- this table is
+        # built from that same result, so pasting it in verbatim is both
+        # easier for the model and guaranteed consistent with the graph.
+        "precedentTable": _build_precedent_table(precedents),
+    }
+
+
+def _build_precedent_table(precedents):
+    if not precedents:
+        return ""
+    header = "| Decision ID | Customer | Recommendation | Reasoning |\n|---|---|---|---|"
+    rows = "\n".join(
+        f"| {p['decisionId']} | {p.get('customerName') or p['customerId']} | {p['recommendation']} | {p['reasoning']} |"
+        for p in precedents
+    )
+    return f"{header}\n{rows}"
 
 
 def run_tool(name, tool_input, session):

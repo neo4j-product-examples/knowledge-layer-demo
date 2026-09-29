@@ -458,7 +458,7 @@ def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_sess
     # Even with nothing failing, criterion text is still fetched -- it's
     # needed for the real APPLIED_POLICY shadow-node edges record_decision
     # writes for every applied rule, not just failed ones.
-    applied_policy_calls = [c for c in fake_session.calls if "APPLIED_POLICY" in c[0]]
+    applied_policy_calls = [c for c in fake_session.calls if "MERGE (d)-[rel:APPLIED_POLICY]->(r)" in c[0]]
     assert len(applied_policy_calls) == 1
     written_rules = {r["ruleId"]: r for r in applied_policy_calls[0][1]["appliedRules"]}
     assert written_rules["POL-001"]["criterion"] == "Minimum Credit Score"

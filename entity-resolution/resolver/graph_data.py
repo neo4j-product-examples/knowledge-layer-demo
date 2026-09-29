@@ -495,6 +495,29 @@ def build_decision_delta(decisions, current_customer_id=None):
     return {"nodes": list(nodes.values()), "edges": edges}
 
 
+def build_precedent_delta(new_decision, prior_decisions):
+    """Graph delta drawing the real, persisted PRECEDENT_FOR edges
+    record_decision writes when a new decision shares a failed policy rule
+    with a past one -- solid decision-to-decision edges, distinct from the
+    dashed customer-to-decision CITED_AS_PRECEDENT edges an unfiltered
+    get_decision_history browse draws (see build_decision_delta). This one
+    reflects an actual graph relationship record_decision just persisted,
+    not a live, judgment-based citation."""
+    if not prior_decisions:
+        return {"nodes": [], "edges": []}
+
+    delta = build_decision_delta(prior_decisions + [new_decision])
+    for prior in prior_decisions:
+        delta["edges"].append({
+            "from": _node_id("context", prior["decisionId"]),
+            "to": _node_id("context", new_decision["decisionId"]),
+            "label": "PRECEDENT_FOR",
+            "title": "PRECEDENT_FOR",
+            "dashes": False,
+        })
+    return delta
+
+
 def fetch_graph_json(session):
     node_rows = [dict(r) for r in session.run(_FETCH_NODES)]
     edge_rows = [dict(r) for r in session.run(_FETCH_EDGES)]

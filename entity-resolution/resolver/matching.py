@@ -493,14 +493,24 @@ def record_decision(session, decision):
     decisionId, so re-recording the same decisionId updates it in place
     rather than duplicating).
 
-    Also materializes real ABOUT and APPLIED_POLICY relationships to
-    Customer/PolicyRule nodes living inside `context` itself -- composite
-    databases forbid relationships that cross constituents, so these are
-    lightweight shadow copies (just the id and a display field, nothing
-    sensitive), not references into meridian or lendingpolicy directly.
-    decision's optional "appliedRules" key is a list of {ruleId, criterion,
-    failed} dicts (see chat.run_record_decision) -- without it, only the
-    Decision node and its ABOUT edge are written."""
+    Also materializes real ABOUT, APPLIED_POLICY, and TRIGGERED
+    relationships to Customer/PolicyRule/Escalation nodes living inside
+    `context` itself -- composite databases forbid relationships that
+    cross constituents, so these are lightweight shadow copies (just the
+    id and a display field, nothing sensitive), not references into
+    meridian or lendingpolicy directly. decision's optional "appliedRules"
+    key is a list of {ruleId, criterion, failed} dicts (see
+    chat.run_record_decision) -- without it, only the Decision node and
+    its ABOUT edge are written.
+
+    Also auto-discovers precedent: any prior decision that failed the same
+    policy rule this one just failed gets a real, permanent
+    PRECEDENT_FOR edge to this one (Decision -[:PRECEDENT_FOR]-> Decision).
+    This makes precedent a persisted fact of the graph rather than
+    something re-derived by judgment on every later query. Returns that
+    list of prior decisions (each a dict with decisionId, customerId,
+    customerName, recommendation, reasoning, escalationRole) -- empty if
+    this decision didn't fail anything a past decision also failed."""
     session.run(
         """
         USE meridianComposite.context
@@ -530,6 +540,33 @@ def record_decision(session, decision):
             """,
             decisionId=decision["decisionId"], appliedRules=applied_rules,
         )
+
+    if decision.get("escalationRole"):
+        session.run(
+            """
+            USE meridianComposite.context
+            MATCH (d:Decision {decisionId: $decisionId})
+            MERGE (e:Escalation {role: $escalationRole})
+            MERGE (d)-[:TRIGGERED]->(e)
+            """,
+            decisionId=decision["decisionId"], escalationRole=decision["escalationRole"],
+        )
+
+    result = session.run(
+        """
+        USE meridianComposite.context
+        MATCH (newDecision:Decision {decisionId: $decisionId})
+        MATCH (newDecision)-[:APPLIED_POLICY {failed: true}]->(rule:PolicyRule)
+        MATCH (rule)<-[:APPLIED_POLICY {failed: true}]-(priorDecision:Decision)
+        WHERE priorDecision.decisionId <> newDecision.decisionId
+        MERGE (priorDecision)-[:PRECEDENT_FOR]->(newDecision)
+        RETURN DISTINCT priorDecision.decisionId AS decisionId, priorDecision.customerId AS customerId,
+               priorDecision.customerName AS customerName, priorDecision.recommendation AS recommendation,
+               priorDecision.reasoning AS reasoning, priorDecision.escalationRole AS escalationRole
+        """,
+        decisionId=decision["decisionId"],
+    )
+    return [dict(r) for r in result]
 
 
 def fetch_document_ownership(session):

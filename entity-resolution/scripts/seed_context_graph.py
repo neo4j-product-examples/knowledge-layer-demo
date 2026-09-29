@@ -10,17 +10,24 @@ runtime by the `record_decision` chat tool, not by this script.
     (:Decision {decisionId, customerId, customerName, productTypeCode,
                 requestedAmount, recommendation, reasoning, appliedRuleIds,
                 failedRuleIds, escalationRole, decidedAt})
-        -[:ABOUT]-> (:Customer {customerId, customerName})
+        -[:ABOUT]->           (:Customer {customerId, customerName})
         -[:APPLIED_POLICY {failed}]-> (:PolicyRule {ruleId, criterion})
+        -[:TRIGGERED]->       (:Escalation {role})
+        -[:PRECEDENT_FOR]->   (:Decision)   -- earlier decision -> later decision
 
 Composite databases forbid relationships that span constituents, so the
-Customer and PolicyRule nodes above are lightweight shadow copies living
-inside `context` itself (same pattern used for shadowDb), not references
-into meridian or lendingpolicy directly -- but the ABOUT and APPLIED_POLICY
-edges themselves are real, native relationships, not just properties. The
-app also still draws a visual link at render time for its own graph pane
-(see graph_data.build_decision_delta); that's a separate, UI-only concern
-from the persisted schema here.
+Customer, PolicyRule, and Escalation nodes above are lightweight shadow
+copies living inside `context` itself (same pattern used for shadowDb),
+not references into meridian or lendingpolicy directly -- but ABOUT,
+APPLIED_POLICY, and TRIGGERED are real, native relationships, not just
+properties. PRECEDENT_FOR is discovered and written automatically
+(record_decision does this at write time for a new decision; this script
+backfills it across the seeded decisions themselves): an earlier decision
+gets a PRECEDENT_FOR edge to a later one whenever they both failed the
+same policy rule -- deterministic, not a judgment call made at query time.
+The app also still draws a visual link at render time for its own graph
+pane (see graph_data.build_decision_delta); that's a separate, UI-only
+concern from the persisted schema here.
 
 All writes are MERGE-based on decisionId, so this is safe to re-run.
 
@@ -227,12 +234,54 @@ with db.get_session(driver) as session:
         rows=applied_policy_rows,
     )
 
+    # Escalation shadow nodes + TRIGGERED edges, same pattern as Customer/
+    # PolicyRule -- shared/deduplicated by role, so "every decision that
+    # ever triggered Credit Risk Committee" is a real traversal too.
+    escalation_rows = [
+        {"decisionId": decision["decisionId"], "escalationRole": decision["escalationRole"]}
+        for decision in DECISIONS
+        if decision["escalationRole"]
+    ]
+    if escalation_rows:
+        session.run(
+            """
+            USE meridianComposite.context
+            UNWIND $rows AS row
+            MATCH (d:Decision {decisionId: row.decisionId})
+            MERGE (e:Escalation {role: row.escalationRole})
+            MERGE (d)-[:TRIGGERED]->(e)
+            """,
+            rows=escalation_rows,
+        )
+
+    # Backfill PRECEDENT_FOR across the seeded decisions themselves, same
+    # rule record_decision applies at write time: an earlier decision that
+    # failed a rule is precedent for a later decision that failed the same
+    # rule. Ordered by decidedAt so precedent only flows forward in time.
+    session.run(
+        """
+        USE meridianComposite.context
+        MATCH (a:Decision)-[:APPLIED_POLICY {failed: true}]->(rule:PolicyRule)<-[:APPLIED_POLICY {failed: true}]-(b:Decision)
+        WHERE a.decidedAt < b.decidedAt
+        MERGE (a)-[:PRECEDENT_FOR]->(b)
+        """
+    )
+
     result = session.run(
         """
         USE meridianComposite.context
         MATCH (d:Decision)
         RETURN d.productTypeCode AS productType, d.recommendation AS recommendation, count(*) AS count
         ORDER BY productType
+        """
+    )
+    for row in result:
+        print(dict(row))
+
+    result = session.run(
+        """
+        USE meridianComposite.context
+        MATCH ()-[r]->() RETURN type(r) AS relType, count(*) AS count ORDER BY relType
         """
     )
     for row in result:

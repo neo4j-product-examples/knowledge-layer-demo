@@ -147,15 +147,18 @@ SCHEMA_ENTITIES = [
      "description": "One citable underwriting rule -- a criterion, a comparison, and a threshold -- e.g. POL-001."},
     {"entityId": "lendingpolicy:EscalationPath", "productId": "lendingpolicy", "name": "Escalation Path",
      "description": "Who a rule escalates to, and under what trigger, when it fails."},
-    # -- context (Decision is the only real label; Outcome/Precedent are
-    # descriptive facets of what a Decision node actually stores as
-    # properties, not separate Neo4j labels) --
+    # -- context (Decision is the anchor; Customer/PolicyRule/Escalation are
+    # shadow copies of entities that live in meridian/lendingpolicy -- same
+    # reasoning as shadowdb's ShadowEntity below, not references into those
+    # constituents directly, since composite databases forbid that) --
     {"entityId": "context:Decision", "productId": "context", "name": "Decision",
-     "description": "The only real node label in this constituent -- one per recorded recommendation."},
-    {"entityId": "context:Outcome", "productId": "context", "name": "Outcome",
-     "description": "Descriptive facet, not a separate label: the recommendation, reasoning, and cited policy rule IDs stored as properties on the Decision node."},
-    {"entityId": "context:Precedent", "productId": "context", "name": "Precedent",
-     "description": "Descriptive facet, not a separate label: how this decision relates to earlier ones for the same product type or customer (see get_decision_history)."},
+     "description": "One per recorded loan recommendation: the recommendation, reasoning, and which policy rules applied/failed."},
+    {"entityId": "context:Customer", "productId": "context", "name": "Customer",
+     "description": "A shadow copy of who the decision was about -- just customerId/customerName, not a reference into meridian."},
+    {"entityId": "context:PolicyRule", "productId": "context", "name": "Policy Rule",
+     "description": "A shadow copy of a cited rule -- just ruleId/criterion, not a reference into lendingpolicy. Shared across every decision that ever cited it, so precedent is a real graph traversal, not a property comparison."},
+    {"entityId": "context:Escalation", "productId": "context", "name": "Escalation",
+     "description": "A shadow copy of the role a decision escalated to (e.g. Credit Risk Committee), shared across every decision that ever triggered it."},
     # -- shadowdb (also descriptive facets -- shadowDb's real labels are
     # just Shadow copies of documents/meridian labels, e.g. Shadow:Customer) --
     {"entityId": "shadowdb:ShadowEntity", "productId": "shadowdb", "name": "Shadow Entity",
@@ -207,10 +210,14 @@ ENTITY_RELATIONSHIPS = [
     {"fromId": "lendingpolicy:PolicyRule", "toId": "lendingpolicy:EscalationPath", "label": "REQUIRES_ESCALATION",
      "description": "Some rules require escalation to a specific role when they fail."},
     # -- context --
-    {"fromId": "context:Decision", "toId": "context:Outcome", "label": "HAS_OUTCOME",
-     "description": "What was decided and why."},
-    {"fromId": "context:Decision", "toId": "context:Precedent", "label": "HAS_PRECEDENT",
-     "description": "How this decision relates to earlier ones."},
+    {"fromId": "context:Decision", "toId": "context:Customer", "label": "ABOUT",
+     "description": "Which customer this decision was about."},
+    {"fromId": "context:Decision", "toId": "context:PolicyRule", "label": "APPLIED_POLICY",
+     "description": "Which policy rule was checked, and whether the applicant's figures failed it (failed property)."},
+    {"fromId": "context:Decision", "toId": "context:Escalation", "label": "TRIGGERED",
+     "description": "Which escalation path this decision required, if any."},
+    {"fromId": "context:Decision", "toId": "context:Decision", "label": "PRECEDENT_FOR",
+     "description": "Written automatically, not by judgment: an earlier decision that failed the same policy rule as a later one."},
     # -- shadowdb --
     {"fromId": "shadowdb:ShadowEntity", "toId": "shadowdb:SimilarityMatch", "label": "PRODUCES",
      "description": "Matching two shadow entities produces a SIMILAR_TO match linking them."},
