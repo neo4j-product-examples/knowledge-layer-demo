@@ -50,9 +50,18 @@ before, and why. Ground your recommendation in that history where it's relevant
 (e.g. "consistent with how we handled a similar term loan for X") rather than
 reasoning about this application as if it were the first one ever made.
 
-Whenever get_decision_history returns one or more precedent decisions, your final
-answer must ALWAYS include, in that same answer, a markdown table listing each
-one: decision ID, customer, recommendation, and the policy rule(s) that drove it
+get_decision_history returns every decision of that product type, not just
+comparable ones -- a clean approval where every rule passed is NOT precedent for
+a case where a rule is failing, and citing it as if it were is misleading, not
+thorough. Only call a decision "precedent" for this case if it's actually
+analogous: it failed (or passed) the SAME rule this case turns on, or reached the
+same kind of outcome under a similar circumstance. If the tool returns unrelated
+decisions, leave them out of the precedent table entirely rather than including
+every result just because the tool returned it.
+
+Whenever at least one genuinely comparable precedent exists, your final answer
+must ALWAYS include, in that same answer, a markdown table listing each one:
+decision ID, customer, recommendation, and the policy rule(s) that drove it
 (applied and, if any, failed). Same rule as the policy-check table above -- don't
 just mention a precedent in prose or point to a table that isn't in this response;
 write it out, every time relevant precedent exists.
