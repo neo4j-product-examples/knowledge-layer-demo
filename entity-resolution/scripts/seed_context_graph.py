@@ -9,7 +9,7 @@ runtime by the `record_decision` chat tool, not by this script.
 
     (:Decision {decisionId, customerId, customerName, productTypeCode,
                 requestedAmount, recommendation, reasoning, appliedRuleIds,
-                escalationRole, decidedAt})
+                failedRuleIds, escalationRole, decidedAt})
 
 No native relationship to the customer -- composite databases forbid
 relationships that span constituents, so customerId/customerName are just
@@ -29,22 +29,6 @@ from resolver import db
 
 DECISIONS = [
     {
-        "decisionId": "DEC-C002-SEED",
-        "customerId": "C002",
-        "customerName": "Alvarez Distribution Co",
-        "productTypeCode": "LN-TERM",
-        "requestedAmount": 150000,
-        "recommendation": "Approve",
-        "reasoning": (
-            "Credit score 712 (>= 650, POL-001), DSCR 1.41x (>= 1.25, POL-002), "
-            "loan-to-cash-flow 2.1x (<= 3.5, POL-003). KYC risk rating Low. No "
-            "delinquent facilities on the applicant or any affiliate."
-        ),
-        "appliedRuleIds": ["POL-001", "POL-002", "POL-003"],
-        "escalationRole": None,
-        "decidedAt": "2025-11-03",
-    },
-    {
         "decisionId": "DEC-C003-SEED",
         "customerId": "C003",
         "customerName": "Watts, Robinson and Nguyen",
@@ -56,6 +40,7 @@ DECISIONS = [
             "No further criteria evaluated once the credit-score threshold failed."
         ),
         "appliedRuleIds": ["POL-006"],
+        "failedRuleIds": ["POL-006"],
         "escalationRole": None,
         "decidedAt": "2025-12-11",
     },
@@ -71,6 +56,7 @@ DECISIONS = [
             "Line of credit sized conservatively relative to trailing cash flow."
         ),
         "appliedRuleIds": ["POL-008", "POL-009"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-01-22",
     },
@@ -89,6 +75,7 @@ DECISIONS = [
             "applicant's own standing."
         ),
         "appliedRuleIds": ["POL-001", "POL-002", "POL-005"],
+        "failedRuleIds": ["POL-005"],
         "escalationRole": "Credit Risk Committee",
         "decidedAt": "2026-02-18",
     },
@@ -104,6 +91,7 @@ DECISIONS = [
             "for commercial real estate loans (POL-010)."
         ),
         "appliedRuleIds": ["POL-010"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-03-30",
     },
@@ -120,13 +108,63 @@ DECISIONS = [
             "being provided before disbursement."
         ),
         "appliedRuleIds": ["POL-011"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-05-14",
+    },
+    {
+        "decisionId": "DEC-C009-SEED",
+        "customerId": "C009",
+        "customerName": "Cannon, Anderson and Alvarez",
+        "productTypeCode": "LN-TERM",
+        "requestedAmount": 450000,
+        "recommendation": "Decline",
+        "reasoning": (
+            "Credit score 701 and KYC risk rating Low both cleared policy "
+            "(POL-001, POL-004), but the requested $450,000 came in at roughly "
+            "4.1x trailing annual net cash flow, over the 3.5x loan-to-cash-flow "
+            "cap (POL-003). Declined as structured; invited to reapply at an "
+            "amount consistent with the cap."
+        ),
+        "appliedRuleIds": ["POL-001", "POL-003", "POL-004"],
+        "failedRuleIds": ["POL-003"],
+        "escalationRole": None,
+        "decidedAt": "2026-04-10",
+    },
+    {
+        "decisionId": "DEC-C010-SEED",
+        "customerId": "C010",
+        "customerName": "Santos, Kim and Holmes",
+        "productTypeCode": "LN-TERM",
+        "requestedAmount": 380000,
+        "recommendation": "Approve",
+        "reasoning": (
+            "Credit score 735 (Good), DSCR 1.38x (>= 1.25, POL-002), "
+            "loan-to-cash-flow 2.6x (<= 3.5, POL-003). KYC risk rating Low, "
+            "no delinquent facilities on the applicant or any affiliate. "
+            "Approved as requested."
+        ),
+        "appliedRuleIds": ["POL-001", "POL-002", "POL-003", "POL-004", "POL-005"],
+        "failedRuleIds": [],
+        "escalationRole": None,
+        "decidedAt": "2026-04-25",
     },
 ]
 
 driver = db.get_driver()
 with db.get_session(driver) as session:
+    # DEC-C002-SEED (Alvarez Distribution Co, Approve) was retired -- Alvarez
+    # is the delinquent affiliate in Rosa's own case, and a clean historical
+    # approval for that same company read as a contradiction. MERGE only
+    # adds/updates, so it has to be deleted explicitly.
+    session.run(
+        """
+        USE meridianComposite.context
+        MATCH (d:Decision {decisionId: 'DEC-C002-SEED'})
+        DETACH DELETE d
+        """
+    )
+
     session.run(
         """
         USE meridianComposite.context
@@ -136,7 +174,7 @@ with db.get_session(driver) as session:
             d.productTypeCode = row.productTypeCode, d.requestedAmount = row.requestedAmount,
             d.recommendation = row.recommendation, d.reasoning = row.reasoning,
             d.appliedRuleIds = row.appliedRuleIds, d.escalationRole = row.escalationRole,
-            d.decidedAt = row.decidedAt
+            d.failedRuleIds = row.failedRuleIds, d.decidedAt = row.decidedAt
         """,
         rows=DECISIONS,
     )
