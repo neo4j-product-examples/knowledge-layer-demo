@@ -51,6 +51,18 @@ RETURN a.sourceId AS fromId, b.sourceId AS toId
 
 _GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8", "context": "#7A5C99"}
 _RISK_COLOR = "#D6483F"
+_PASS_COLOR = "#4C8C5B"
+# Recommendations that count as a real "fail" outcome for coloring a
+# Decision node -- Escalate is included because it only ever happens as a
+# consequence of a rule actually failing (see chat.run_record_decision),
+# not a clean pass. Only Decision nodes get this red/green treatment; a
+# PolicyRule node itself stays its plain policy-teal regardless of whether
+# it was failed (see build_policy_failure_delta).
+_FAIL_RECOMMENDATIONS = {"Decline", "Escalate"}
+
+
+def _decision_color(decision):
+    return _RISK_COLOR if decision["recommendation"] in _FAIL_RECOMMENDATIONS else _PASS_COLOR
 
 
 def _node_id(source_graph, source_id):
@@ -411,9 +423,12 @@ def build_policy_failure_delta(customer_id, failed_rules):
     applicant fails (e.g. loan-to-cash-flow) never showed up any
     differently on the canvas than one they passed. Reuses the same
     policy:<ruleId> node id build_lending_policy_delta already put on
-    screen, recoloring it red in place rather than adding an unrelated
-    second node, plus a direct customer -> rule edge so the failure is
-    visually obvious without having to trace back through the section."""
+    screen, plus a direct customer -> rule edge so the failure is visually
+    obvious without having to trace back through the section. The rule
+    node itself keeps its normal policy-teal color -- only the Decision
+    node is colored red/green now (see _decision_color), so the failure
+    signal lives in the FAILS_POLICY edge and the label text, not in a
+    recolored rule node."""
     if not failed_rules:
         return {"nodes": [], "edges": []}
 
@@ -425,7 +440,7 @@ def build_policy_failure_delta(customer_id, failed_rules):
             "id": rule_node_id,
             "label": f"{rule['ruleId']}: {rule.get('criterion')} (Failed)",
             "group": "policy",
-            "color": _RISK_COLOR,
+            "color": _GROUP_COLORS["policy"],
             "componentId": None,
         })
         edges.append({
@@ -438,84 +453,206 @@ def build_policy_failure_delta(customer_id, failed_rules):
     return {"nodes": nodes, "edges": edges}
 
 
-def build_decision_delta(decisions, current_customer_id=None):
-    """Graph delta revealing past loan decisions from the context constituent
-    (get_decision_history / record_decision). Each Decision connects to a
-    Customer stub node (see _customer_stub_node) for whichever customer it
-    was actually about, so precedent decisions about other customers render
-    attached to their own customer rather than conflated with whoever is
-    currently under discussion. Escalated decisions render in the risk
-    color, same convention as build_lending_policy_delta.
-
-    When current_customer_id is given (get_decision_history was scoped to a
-    customer), any decision about a *different* customer also gets a dashed
-    "CITED_AS_PRECEDENT" edge from the current customer -- otherwise a
-    precedent decision would render as an unexplained, fully disconnected
-    island with no visual link to the case it's actually informing."""
+def build_decision_delta(decisions):
+    """Graph delta revealing a plain, non-precedent loan decision -- used
+    by chat.run_record_decision's clean-approval branch, when nothing
+    failed and there's no shadow-rule chain to hang it off of (see
+    build_new_case_steps for the failed-rule case). Just the Decision
+    node itself, colored red or green by outcome (see _decision_color).
+    No edge to a customer stub: which customer a decision was about is
+    already a property on the Decision node itself (customerId/
+    customerName, see matching.record_decision), not something the
+    canvas needs a line for."""
     if not decisions:
         return {"nodes": [], "edges": []}
 
     nodes = {}
-    edges = []
-    if current_customer_id:
-        current_customer_node = _customer_stub_node(current_customer_id)
-        nodes[current_customer_node["id"]] = current_customer_node
-
     for decision in decisions:
-        customer_id = decision["customerId"]
-        customer_node = _customer_stub_node(customer_id)
-        nodes[customer_node["id"]] = customer_node
-
         decision_node_id = _node_id("context", decision["decisionId"])
-        is_escalated = bool(decision.get("escalationRole"))
         nodes[decision_node_id] = {
             "id": decision_node_id,
-            "label": f"{decision['recommendation']}: {decision.get('customerName') or customer_id}",
+            "label": f"{decision['recommendation']}: {decision.get('customerName') or decision['customerId']}",
             "group": "context",
-            "color": _RISK_COLOR if is_escalated else _GROUP_COLORS["context"],
+            "color": _decision_color(decision),
             "componentId": None,
         }
-        edges.append({
-            "from": customer_node["id"],
-            "to": decision_node_id,
-            "label": "HAS_DECISION",
-            "title": decision.get("reasoning") or "HAS_DECISION",
-            "dashes": False,
+    return {"nodes": list(nodes.values()), "edges": []}
+
+
+def _case_node(decision):
+    """The citation itself -- which customer, which case -- as its own
+    node, distinct from the outcome (see _outcome_node). Plain
+    context-purple: a case isn't red or green, only its decision is."""
+    return {
+        "id": _node_id("context", f"case:{decision['decisionId']}"),
+        "label": f"Case: {decision.get('customerName') or decision['customerId']}",
+        "group": "context",
+        "color": _GROUP_COLORS["context"],
+        "componentId": None,
+    }
+
+
+def _outcome_node(decision):
+    """Just the verdict -- a fact about the case (see _case_node), colored
+    red or green (see _decision_color), connected FROM its case by
+    HAS_DECISION."""
+    return {
+        "id": _node_id("context", f"decision:{decision['decisionId']}"),
+        "label": decision["recommendation"],
+        "group": "context",
+        "color": _decision_color(decision),
+        "componentId": None,
+    }
+
+
+def _shadow_rule_node(rule_id, criterion):
+    return {
+        "id": _node_id("context", f"policy:{rule_id}"),
+        "label": f"{rule_id}: {criterion or rule_id}",
+        "group": "context",
+        "color": _GROUP_COLORS["context"],
+        "componentId": None,
+    }
+
+
+def build_rule_precedent_steps(precedents):
+    """Ordered list of small graph deltas revealing real precedent for a
+    set of failed policy rules, one hop at a time -- meant to be revealed
+    live (see chat.run_get_decision_history / app.py's streaming loop).
+    This is now called BEFORE a recommendation is written (get_decision_history's
+    whole job), so it can actually inform the recommendation instead of
+    just citing it afterward -- see build_new_case_steps for the second
+    half, attaching the new decision once it's actually written.
+
+    Each entry is {"label": <human-readable step label>, "graph": <delta>}.
+    The chain so far, three hops:
+
+        (PolicyRule, failed, in lendingpolicy)
+            -[:SAME_AS]->
+        (PolicyRule shadow copy, living in the context constituent)
+            -[:HAS_PRECEDENT]->
+        (Case -- the citation itself: which customer, which loan)
+            -[:HAS_DECISION]->
+        (Decision -- just the verdict, colored red/green)
+
+    precedents is matching.find_precedents_for_failed_rules's result --
+    each row carries the ruleId/ruleCriterion it matched on, grouped here
+    by rule so every precedent for POL-003 reveals together before moving
+    to POL-005."""
+    if not precedents:
+        return []
+
+    rules_seen = []
+    prior_by_rule = {}
+    for prior in precedents:
+        rule_id = prior["ruleId"]
+        if rule_id not in prior_by_rule:
+            prior_by_rule[rule_id] = []
+            rules_seen.append(rule_id)
+        prior_by_rule[rule_id].append(prior)
+
+    steps = []
+    for rule_id in rules_seen:
+        priors = prior_by_rule[rule_id]
+        shadow_rule_node = _shadow_rule_node(rule_id, priors[0].get("ruleCriterion"))
+        shadow_rule_node_id = shadow_rule_node["id"]
+
+        steps.append({
+            "label": f"Citing {rule_id} in context graph",
+            "graph": {
+                "nodes": [shadow_rule_node],
+                "edges": [{
+                    "from": _node_id("policy", rule_id), "to": shadow_rule_node_id,
+                    "label": "SAME_AS", "title": "SAME_AS", "dashes": False,
+                }],
+            },
         })
 
-        if current_customer_id and customer_id != current_customer_id:
-            edges.append({
-                "from": _node_id("meridian", current_customer_id),
-                "to": decision_node_id,
-                "label": "CITED_AS_PRECEDENT",
-                "title": "CITED_AS_PRECEDENT",
-                "dashes": True,
+        for prior in priors:
+            case_node = _case_node(prior)
+            steps.append({
+                "label": f"Found precedent: {prior.get('customerName') or prior['customerId']}",
+                "graph": {
+                    "nodes": [case_node],
+                    "edges": [{
+                        "from": shadow_rule_node_id, "to": case_node["id"],
+                        "label": "HAS_PRECEDENT", "title": f"Also failed {rule_id}",
+                        "dashes": False,
+                    }],
+                },
+            })
+            outcome_node = _outcome_node(prior)
+            steps.append({
+                "label": f"Precedent outcome: {prior['recommendation']}",
+                "graph": {
+                    "nodes": [outcome_node],
+                    "edges": [{
+                        "from": case_node["id"], "to": outcome_node["id"],
+                        "label": "HAS_DECISION", "title": prior.get("reasoning") or "HAS_DECISION",
+                        "dashes": False,
+                    }],
+                },
             })
 
-    return {"nodes": list(nodes.values()), "edges": edges}
+    return steps
 
 
-def build_precedent_delta(new_decision, prior_decisions):
-    """Graph delta drawing the real, persisted PRECEDENT_FOR edges
-    record_decision writes when a new decision shares a failed policy rule
-    with a past one -- solid decision-to-decision edges, distinct from the
-    dashed customer-to-decision CITED_AS_PRECEDENT edges an unfiltered
-    get_decision_history browse draws (see build_decision_delta). This one
-    reflects an actual graph relationship record_decision just persisted,
-    not a live, judgment-based citation."""
-    if not prior_decisions:
-        return {"nodes": [], "edges": []}
+def build_new_case_steps(new_decision, failed_rules):
+    """Ordered list of small graph deltas linking the just-recorded
+    decision into the chain (see chat.run_record_decision, called after
+    build_rule_precedent_steps already revealed whatever precedent
+    exists) -- one "Linking this case to <rule>" hop per failed rule,
+    then exactly one final "Outcome" hop, colored red/green (see
+    _decision_color). Each per-rule hop re-sends the shadow rule node and
+    its SAME_AS edge too (not just build_rule_precedent_steps's job) --
+    harmless if already on screen (NVL just no-ops the repeat), but
+    required if this rule had zero precedent, since nothing would have
+    put that shadow node there otherwise.
 
-    delta = build_decision_delta(prior_decisions + [new_decision])
-    for prior in prior_decisions:
-        delta["edges"].append({
-            "from": _node_id("context", prior["decisionId"]),
-            "to": _node_id("context", new_decision["decisionId"]),
-            "label": "PRECEDENT_FOR",
-            "title": "PRECEDENT_FOR",
-            "dashes": False,
+    failed_rules is new_decision's own [{ruleId, criterion}, ...] (see
+    chat.run_record_decision)."""
+    if not failed_rules:
+        return []
+
+    new_case_node = _case_node(new_decision)
+    new_case_node_id = new_case_node["id"]
+    steps = []
+    for rule in failed_rules:
+        rule_id = rule["ruleId"]
+        shadow_rule_node = _shadow_rule_node(rule_id, rule.get("criterion"))
+        shadow_rule_node_id = shadow_rule_node["id"]
+        steps.append({
+            "label": f"Linking this case to {rule_id}",
+            "graph": {
+                "nodes": [shadow_rule_node, new_case_node],
+                "edges": [
+                    {
+                        "from": _node_id("policy", rule_id), "to": shadow_rule_node_id,
+                        "label": "SAME_AS", "title": "SAME_AS", "dashes": False,
+                    },
+                    {
+                        "from": shadow_rule_node_id, "to": new_case_node_id,
+                        "label": "HAS_PRECEDENT", "title": f"Also failed {rule_id}",
+                        "dashes": False,
+                    },
+                ],
+            },
         })
-    return delta
+
+    new_outcome_node = _outcome_node(new_decision)
+    steps.append({
+        "label": f"Outcome: {new_decision['recommendation']}",
+        "graph": {
+            "nodes": [new_outcome_node],
+            "edges": [{
+                "from": new_case_node_id, "to": new_outcome_node["id"],
+                "label": "HAS_DECISION", "title": new_decision.get("reasoning") or "HAS_DECISION",
+                "dashes": False,
+            }],
+        },
+    })
+
+    return steps
 
 
 def fetch_graph_json(session):

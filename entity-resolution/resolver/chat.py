@@ -44,32 +44,32 @@ this table. Never write "see the table above" or point to a breakdown that isn't
 present in this exact response; if you haven't actually written the table in your
 answer yet, write it now before you finish.
 
-Also call get_decision_history for the applicable product type (and this customer_id)
-to get a general sense of history before you reach a recommendation -- has this
-customer been seen before, what's the overall pattern for this product type. This
-is a broad browse, not precedent citation: it returns every decision of that
-product type, not just comparable ones, so don't cite anything from it directly
-in your final answer or call it "precedent" yourself.
+Once you know which rules the applicant's actual figures FAILED (from the comparison
+above), and only if at least one did, call get_decision_history with those
+failed_rule_ids -- BEFORE you reach your recommendation, not after. This is the real
+precedent lookup (every prior decision that failed the exact same rule(s), and what
+was decided on them), and it must actually inform your recommendation -- weigh what
+happened in those prior cases as real evidence, the same way a human underwriter
+would, rather than treating the policy numbers in isolation. Skip this call entirely
+if nothing failed; a clean pass has no precedent to look up.
 
-Real precedent is discovered and cited automatically, not by your judgment: once
-you call record_decision with failed_rule_ids, the system finds every prior
-decision that failed the exact same policy rule and links it to this one as real,
-persisted precedent. record_decision's result includes a "precedentTable" field
-(already formatted as a markdown table) whenever that search found something. If
-it's non-empty, paste it into your final answer verbatim under its own "Precedent"
-heading -- don't reformat it, summarize it away, or write your own precedent table
-instead. If it's empty, there is no precedent for this case; say so plainly rather
-than reaching into the broad get_decision_history browse for something to cite.
+record_decision (see below) re-runs this same lookup once your decision is actually
+written, and its result includes a "precedentTable" field (a ready-made markdown
+table of what it found). If it's non-empty, paste it into your final answer verbatim
+under its own "Precedent" heading -- don't reformat it, summarize it away, or write
+your own precedent table instead. If it's empty, there is no precedent for this
+case; say so plainly.
 
 Whenever you state a specific recommendation (approve/decline/escalate/conditional)
 for a specific loan, you MUST call record_decision immediately before writing your
 final answer -- this is not optional and is not the same step as get_lending_policy
-or get_decision_history. Call every other tool you need first, reach your
-recommendation, then call record_decision with that recommendation and a concise
-reasoning summary (including the policy rule IDs that actually drove it) as your
-very last tool call, so it becomes part of the bank's decision history for future
-questions. Only skip it for questions that don't reach a specific recommendation
-(e.g. pulling up a customer's credit score with no ask about approving anything).
+or get_decision_history. Call every other tool you need first (including
+get_decision_history, once you know what failed), reach your recommendation, then
+call record_decision with that recommendation and a concise reasoning summary
+(including the policy rule IDs that actually drove it) as your very last tool call,
+so it becomes part of the bank's decision history for future questions. Only skip
+it for questions that don't reach a specific recommendation (e.g. pulling up a
+customer's credit score with no ask about approving anything).
 
 Of the policy rule IDs you cite in applied_rule_ids, also pass the ones the
 applicant's actual figures FAILED against (not just the ones that happened to
@@ -230,30 +230,26 @@ TOOLS = [
     {
         "name": "get_decision_history",
         "description": (
-            "Returns past loan decisions from Meridian's decision history (the "
-            "context graph) for a given product type, optionally scoped to one "
-            "customer's own history. Use this for loan-decision questions to check "
-            "precedent -- has the bank approved, declined, or escalated similar "
-            "loans before, and why -- so a new recommendation is grounded in past "
-            "decisions instead of reasoned in isolation."
+            "Looks up real precedent for a loan recommendation: given the policy "
+            "rule IDs the applicant's actual figures FAILED (from comparing "
+            "get_lending_policy's thresholds against their real numbers), finds "
+            "every prior decision that failed the exact same rule(s) and what was "
+            "decided on them. Call this AFTER get_lending_policy, once you know "
+            "which rules failed, and BEFORE you write your recommendation -- the "
+            "precedent it returns should actually inform the recommendation, not "
+            "just get cited after the fact. Skip it if nothing failed; there's no "
+            "precedent to look up for a clean pass."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "product_type_code": {
-                    "type": "string",
-                    "description": (
-                        "One of: 'LN-TERM' (Term Loan), 'LN-SBA' (SBA Loan), "
-                        "'LN-LOC' (Line of Credit), 'LN-CRE' (Commercial Real Estate Loan), "
-                        "'LN-EQP' (Equipment Loan)."
-                    ),
-                },
-                "customer_id": {
-                    "type": "string",
-                    "description": "Optional: the Meridian customerId, e.g. 'C001', to also check this specific customer's own decision history.",
+                "failed_rule_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The policy rule IDs (e.g. 'POL-003') the applicant's actual figures failed against.",
                 },
             },
-            "required": ["product_type_code"],
+            "required": ["failed_rule_ids"],
         },
     },
     {
@@ -402,6 +398,8 @@ def describe_tool_call(name, tool_input):
     label = TOOL_STEP_LABELS.get(name, f"Running {name}")
     tool_input = tool_input or {}
     details = [tool_input[k] for k in ("product_type_code", "customer_id") if tool_input.get(k)]
+    if tool_input.get("failed_rule_ids"):
+        details.append(", ".join(tool_input["failed_rule_ids"]))
     return f"{label} ({', '.join(details)})" if details else label
 
 
@@ -518,10 +516,15 @@ def run_get_business_plan_details(session):
     }
 
 
-def run_get_decision_history(session, product_type_code, customer_id=None):
-    decisions = matching.fetch_decision_history(session, product_type_code, customer_id)
-    graph = graph_data.build_decision_delta(decisions, current_customer_id=customer_id)
-    return {"productTypeCode": product_type_code, "decisions": decisions, "graph": graph}
+def run_get_decision_history(session, failed_rule_ids):
+    """The real precedent lookup, now run BEFORE the recommendation is
+    written (see the tool's own description) -- reuses the exact same
+    query matching.record_decision runs at write time, so what informs
+    the recommendation and what gets persisted/cited afterward are
+    guaranteed to agree."""
+    precedents = matching.find_precedents_for_failed_rules(session, failed_rule_ids)
+    graph_steps = graph_data.build_rule_precedent_steps(precedents)
+    return {"failedRuleIds": failed_rule_ids, "precedents": precedents, "graphSteps": graph_steps}
 
 
 def run_record_decision(
@@ -563,25 +566,30 @@ def run_record_decision(
         "decidedAt": datetime.date.today().isoformat(),
     }
     precedents = matching.record_decision(session, decision)
-    graph = graph_data.build_decision_delta([decision])
 
+    graph_steps = []
     if failed_rule_ids:
         # get_lending_policy only ever showed the rules that were CHECKED,
-        # never the verdict -- this is what actually turns a failing rule
-        # red on the canvas, in place, rather than leaving every rule
-        # looking identical regardless of whether the applicant cleared it.
+        # never the verdict -- FAILS_POLICY is what actually turns a
+        # failing rule into a visible fact, sent immediately as usual.
+        # The SAME_AS/HAS_PRECEDENT/HAS_DECISION chain (graph_steps) is
+        # kept separate and revealed hop by hop instead, like a real
+        # traversal -- see app.py's streaming loop, which sends each one
+        # with a pause instead of dumping the whole result in one frame.
+        # get_decision_history already revealed whatever precedent exists
+        # (build_rule_precedent_steps, called earlier this turn); this is
+        # just the second half, attaching the new decision to it.
         failed_rules = [r for r in all_rules if r["ruleId"] in failed_rule_ids]
-        failure_graph = graph_data.build_policy_failure_delta(customer_id, failed_rules)
-        graph = merge_graph_deltas([graph, failure_graph])
-
-    if precedents:
-        precedent_graph = graph_data.build_precedent_delta(decision, precedents)
-        graph = merge_graph_deltas([graph, precedent_graph])
+        graph = graph_data.build_policy_failure_delta(customer_id, failed_rules)
+        graph_steps = graph_data.build_new_case_steps(decision, failed_rules)
+    else:
+        graph = graph_data.build_decision_delta([decision])
 
     return {
         "decisionId": decision["decisionId"],
         "recorded": True,
         "graph": graph,
+        "graphSteps": graph_steps,
         # A precedent is now discovered and persisted deterministically
         # (a real PRECEDENT_FOR edge to any prior decision that failed the
         # exact same rule), not judged by the model -- this table is
@@ -594,10 +602,14 @@ def run_record_decision(
 def _build_precedent_table(precedents):
     if not precedents:
         return ""
+    # A decision can share more than one failed rule with the new one, so
+    # matching.record_decision's discovery query returns one row per
+    # shared rule -- dedupe to one row per decision for the table.
+    by_decision_id = {p["decisionId"]: p for p in precedents}
     header = "| Decision ID | Customer | Recommendation | Reasoning |\n|---|---|---|---|"
     rows = "\n".join(
         f"| {p['decisionId']} | {p.get('customerName') or p['customerId']} | {p['recommendation']} | {p['reasoning']} |"
-        for p in precedents
+        for p in by_decision_id.values()
     )
     return f"{header}\n{rows}"
 
@@ -622,7 +634,7 @@ def run_tool(name, tool_input, session):
     if name == "get_business_plan_details":
         return run_get_business_plan_details(session)
     if name == "get_decision_history":
-        return run_get_decision_history(session, tool_input["product_type_code"], tool_input.get("customer_id"))
+        return run_get_decision_history(session, tool_input["failed_rule_ids"])
     if name == "record_decision":
         return run_record_decision(
             session, tool_input["customer_id"], tool_input["product_type_code"],
