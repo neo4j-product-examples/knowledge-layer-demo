@@ -14,12 +14,15 @@ together. This is what the "View Ontology" panel renders -- a static
 architecture reveal, separate from the shadow/decision graph the chat tools
 build up during a session.
 
-context and shadowdb are thinner in reality (Decision is the only real
-label in context; shadowDb's schema is just shadow copies of the other two
-plus the SIMILAR_TO match). Their branches include a couple of honestly-
-labeled descriptive facets (Outcome/Precedent, Shadow Entity/Similarity
-Match) rather than inventing fake Neo4j labels -- called out as such in
-their own description text.
+shadowdb is thinner in reality (its schema is just shadow copies of the
+other two plus the SIMILAR_TO match) -- its branch includes a couple of
+honestly-labeled descriptive facets (Shadow Entity/Similarity Match)
+rather than inventing fake Neo4j labels, called out as such in its own
+description text. context, by contrast, is now a real small schema of its
+own: Decision is the anchor, and Customer/PolicyRule/Escalation are real
+shadow-copy node labels (same MERGE pattern as shadowdb's ShadowEntity)
+connected by real ABOUT/APPLIED_POLICY/TRIGGERED/PRECEDENT_FOR
+relationships -- see resolver/matching.record_decision.
 
 All writes are MERGE-based, so this is safe to re-run.
 
@@ -102,9 +105,9 @@ DATA_PRODUCTS = [
 
 # The real node labels each constituent's schema actually contains -- one
 # SchemaEntity per label, taken straight from the MATCH clauses in
-# resolver/matching.py. context and shadowdb get a couple of honestly-framed
-# descriptive facets instead, since their real schema is thinner (see
-# their own description text for what's real vs. descriptive).
+# resolver/matching.py. shadowdb gets a couple of honestly-framed
+# descriptive facets instead, since its real schema is thinner (see
+# its own description text for what's real vs. descriptive).
 SCHEMA_ENTITIES = [
     # -- meridian --
     {"entityId": "meridian:Customer", "productId": "meridian", "name": "Customer",
@@ -264,6 +267,20 @@ RELATIONSHIPS = [
 
 driver = db.get_driver()
 with db.get_session(driver) as session:
+    # MERGE never deletes -- retire any SchemaEntity (and its RELATES
+    # edges) that no longer appears in SCHEMA_ENTITIES below, e.g. the old
+    # context:Outcome/context:Precedent descriptive facets, now that
+    # context has real Customer/PolicyRule/Escalation entities instead.
+    session.run(
+        """
+        USE meridianComposite.ontology
+        MATCH (e:SchemaEntity)
+        WHERE NOT e.entityId IN $currentEntityIds
+        DETACH DELETE e
+        """,
+        currentEntityIds=[e["entityId"] for e in SCHEMA_ENTITIES],
+    )
+
     session.run(
         """
         USE meridianComposite.ontology
