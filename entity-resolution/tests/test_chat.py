@@ -467,11 +467,10 @@ def test_run_record_decision_flags_failed_rule_on_graph(fake_session):
     )
 
     assert result["recorded"] is True
-    # result["graph"] is just the immediate FAILS_POLICY fact -- the rule
-    # itself keeps its plain policy-teal color even though it failed, only
-    # the Decision/outcome node (in graphSteps) gets colored red/green.
+    # result["graph"] is the immediate FAILS_POLICY fact -- the rule
+    # itself is colored red here too, not just the Decision/outcome node.
     nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
-    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._GROUP_COLORS["policy"]
+    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._RISK_COLOR
     edges = {(e["from"], e["to"], e["label"]) for e in result["graph"]["edges"]}
     assert ("meridian:C001", "policy:POL-003", "FAILS_POLICY") in edges
 

@@ -294,9 +294,7 @@ def test_build_policy_failure_delta_flags_failed_rule():
 
     nodes_by_id = {n["id"]: n for n in delta["nodes"]}
     assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
-    # Only Decision nodes get colored red/green now -- the rule itself
-    # keeps its plain policy-teal color even when it failed.
-    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._GROUP_COLORS["policy"]
+    assert nodes_by_id["policy:POL-003"]["color"] == graph_data._RISK_COLOR
     assert "Failed" in nodes_by_id["policy:POL-003"]["label"]
 
     edges = {(e["from"], e["to"], e["label"]) for e in delta["edges"]}
@@ -372,7 +370,8 @@ def test_build_rule_precedent_steps_cites_rule_then_case_then_outcome():
     assert ("context:case:DEC-C009-SEED", "context:decision:DEC-C009-SEED", "HAS_DECISION") in edges
 
     assert not any(nid.startswith("meridian:") for nid in nodes_by_id)
-    assert nodes_by_id["context:policy:POL-003"]["color"] == graph_data._GROUP_COLORS["context"]
+    # The shadow rule copy is colored red too, same fact as the real rule.
+    assert nodes_by_id["context:policy:POL-003"]["color"] == graph_data._RISK_COLOR
     assert nodes_by_id["context:case:DEC-C009-SEED"]["color"] == graph_data._GROUP_COLORS["context"]
     assert nodes_by_id["context:decision:DEC-C009-SEED"]["color"] == graph_data._RISK_COLOR
     assert nodes_by_id["context:decision:DEC-C009-SEED"]["label"] == "Decline"

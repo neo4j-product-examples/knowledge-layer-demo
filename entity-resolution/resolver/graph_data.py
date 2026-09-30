@@ -55,9 +55,9 @@ _PASS_COLOR = "#4C8C5B"
 # Recommendations that count as a real "fail" outcome for coloring a
 # Decision node -- Escalate is included because it only ever happens as a
 # consequence of a rule actually failing (see chat.run_record_decision),
-# not a clean pass. Only Decision nodes get this red/green treatment; a
-# PolicyRule node itself stays its plain policy-teal regardless of whether
-# it was failed (see build_policy_failure_delta).
+# not a clean pass. PolicyRule nodes get the same _RISK_COLOR treatment
+# when they fail (see build_policy_failure_delta/_shadow_rule_node), but
+# based on a plain failed flag/membership, not this recommendation set.
 _FAIL_RECOMMENDATIONS = {"Decline", "Escalate"}
 
 
@@ -423,12 +423,9 @@ def build_policy_failure_delta(customer_id, failed_rules):
     applicant fails (e.g. loan-to-cash-flow) never showed up any
     differently on the canvas than one they passed. Reuses the same
     policy:<ruleId> node id build_lending_policy_delta already put on
-    screen, plus a direct customer -> rule edge so the failure is visually
-    obvious without having to trace back through the section. The rule
-    node itself keeps its normal policy-teal color -- only the Decision
-    node is colored red/green now (see _decision_color), so the failure
-    signal lives in the FAILS_POLICY edge and the label text, not in a
-    recolored rule node."""
+    screen, recoloring it red in place, plus a direct customer -> rule
+    edge so the failure is visually obvious without having to trace back
+    through the section."""
     if not failed_rules:
         return {"nodes": [], "edges": []}
 
@@ -440,7 +437,7 @@ def build_policy_failure_delta(customer_id, failed_rules):
             "id": rule_node_id,
             "label": f"{rule['ruleId']}: {rule.get('criterion')} (Failed)",
             "group": "policy",
-            "color": _GROUP_COLORS["policy"],
+            "color": _RISK_COLOR,
             "componentId": None,
         })
         edges.append({
@@ -506,11 +503,17 @@ def _outcome_node(decision):
 
 
 def _shadow_rule_node(rule_id, criterion):
+    """Every caller only ever creates this for a rule that actually
+    failed (build_rule_precedent_steps's precedents and
+    build_new_case_steps's failed_rules are both discovered/passed in
+    precisely because the rule failed), so it's colored red like its real
+    counterpart (see build_policy_failure_delta) rather than plain
+    context-purple -- the SAME_AS pair should read as the same fact."""
     return {
         "id": _node_id("context", f"policy:{rule_id}"),
         "label": f"{rule_id}: {criterion or rule_id}",
         "group": "context",
-        "color": _GROUP_COLORS["context"],
+        "color": _RISK_COLOR,
         "componentId": None,
     }
 
@@ -527,9 +530,9 @@ def build_rule_precedent_steps(precedents):
     Each entry is {"label": <human-readable step label>, "graph": <delta>}.
     The chain so far, three hops:
 
-        (PolicyRule, failed, in lendingpolicy)
+        (PolicyRule, failed, in lendingpolicy -- colored red)
             -[:SAME_AS]->
-        (PolicyRule shadow copy, living in the context constituent)
+        (PolicyRule shadow copy, in context -- also colored red, same fact)
             -[:HAS_PRECEDENT]->
         (Case -- the citation itself: which customer, which loan)
             -[:HAS_DECISION]->
