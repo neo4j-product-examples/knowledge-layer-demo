@@ -370,8 +370,9 @@ def test_build_rule_precedent_steps_cites_rule_then_case_then_outcome():
     assert ("context:case:DEC-C009-SEED", "context:decision:DEC-C009-SEED", "HAS_DECISION") in edges
 
     assert not any(nid.startswith("meridian:") for nid in nodes_by_id)
-    # The shadow rule copy is colored red too, same fact as the real rule.
-    assert nodes_by_id["context:policy:POL-003"]["color"] == graph_data._RISK_COLOR
+    # Only the real PolicyRule node (in the policy graph) flags red --
+    # its context shadow copy stays plain context-purple.
+    assert nodes_by_id["context:policy:POL-003"]["color"] == graph_data._GROUP_COLORS["context"]
     assert nodes_by_id["context:case:DEC-C009-SEED"]["color"] == graph_data._GROUP_COLORS["context"]
     assert nodes_by_id["context:decision:DEC-C009-SEED"]["color"] == graph_data._RISK_COLOR
     assert nodes_by_id["context:decision:DEC-C009-SEED"]["label"] == "Decline"

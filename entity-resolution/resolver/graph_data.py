@@ -55,9 +55,10 @@ _PASS_COLOR = "#4C8C5B"
 # Recommendations that count as a real "fail" outcome for coloring a
 # Decision node -- Escalate is included because it only ever happens as a
 # consequence of a rule actually failing (see chat.run_record_decision),
-# not a clean pass. PolicyRule nodes get the same _RISK_COLOR treatment
-# when they fail (see build_policy_failure_delta/_shadow_rule_node), but
-# based on a plain failed flag/membership, not this recommendation set.
+# not a clean pass. The real PolicyRule node gets the same _RISK_COLOR
+# treatment when it fails (see build_policy_failure_delta), based on a
+# plain failed flag rather than this recommendation set -- but its
+# context shadow copy (_shadow_rule_node) is never recolored.
 _FAIL_RECOMMENDATIONS = {"Decline", "Escalate"}
 
 
@@ -503,17 +504,15 @@ def _outcome_node(decision):
 
 
 def _shadow_rule_node(rule_id, criterion):
-    """Every caller only ever creates this for a rule that actually
-    failed (build_rule_precedent_steps's precedents and
-    build_new_case_steps's failed_rules are both discovered/passed in
-    precisely because the rule failed), so it's colored red like its real
-    counterpart (see build_policy_failure_delta) rather than plain
-    context-purple -- the SAME_AS pair should read as the same fact."""
+    """Plain context-purple, never recolored red -- only the real
+    PolicyRule node in the lendingpolicy graph flags red when failed (see
+    build_policy_failure_delta); its shadow copy here stays its normal
+    color regardless."""
     return {
         "id": _node_id("context", f"policy:{rule_id}"),
         "label": f"{rule_id}: {criterion or rule_id}",
         "group": "context",
-        "color": _RISK_COLOR,
+        "color": _GROUP_COLORS["context"],
         "componentId": None,
     }
 
@@ -532,7 +531,7 @@ def build_rule_precedent_steps(precedents):
 
         (PolicyRule, failed, in lendingpolicy -- colored red)
             -[:SAME_AS]->
-        (PolicyRule shadow copy, in context -- also colored red, same fact)
+        (PolicyRule shadow copy, in context -- plain context-purple)
             -[:HAS_PRECEDENT]->
         (Case -- the citation itself: which customer, which loan)
             -[:HAS_DECISION]->
