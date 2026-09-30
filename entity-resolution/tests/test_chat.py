@@ -412,6 +412,40 @@ def test_merge_graph_deltas_skips_none_entries():
     assert merged["nodes"] == [{"id": "a"}]
 
 
+def test_run_get_decision_history_looks_up_real_precedent_by_failed_rule(fake_session):
+    fake_session.when(
+        "MATCH (rule:PolicyRule)",
+        [
+            {
+                "decisionId": "DEC-C009-SEED", "customerId": "C009", "customerName": "Cannon, Anderson and Alvarez",
+                "recommendation": "Decline", "reasoning": "Over the cap.", "escalationRole": None,
+                "ruleId": "POL-003", "ruleCriterion": "Maximum Loan Amount to Annual Cash Flow",
+            },
+        ],
+    )
+
+    result = chat.run_get_decision_history(fake_session, ["POL-003"])
+
+    assert result["failedRuleIds"] == ["POL-003"]
+    assert result["precedents"][0]["decisionId"] == "DEC-C009-SEED"
+    # The real traversal, ready to be revealed hop by hop -- see
+    # graph_data.build_rule_precedent_steps.
+    labels = [s["label"] for s in result["graphSteps"]]
+    assert labels == [
+        "Citing POL-003 in context graph",
+        "Found precedent: Cannon, Anderson and Alvarez",
+        "Precedent outcome: Decline",
+    ]
+
+
+def test_run_get_decision_history_skips_lookup_with_no_failed_rules(fake_session):
+    result = chat.run_get_decision_history(fake_session, [])
+
+    assert result["precedents"] == []
+    assert result["graphSteps"] == []
+    assert fake_session.calls == []
+
+
 def test_run_record_decision_flags_failed_rule_on_graph(fake_session):
     fake_session.when("c.customerType AS customerType", [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}])
     fake_session.when(
@@ -433,14 +467,30 @@ def test_run_record_decision_flags_failed_rule_on_graph(fake_session):
     )
 
     assert result["recorded"] is True
+    # result["graph"] is the immediate FAILS_POLICY fact -- the rule
+    # itself is colored red here too, not just the Decision/outcome node.
     nodes_by_id = {n["id"]: n for n in result["graph"]["nodes"]}
     assert nodes_by_id["policy:POL-003"]["color"] == graph_data._RISK_COLOR
     edges = {(e["from"], e["to"], e["label"]) for e in result["graph"]["edges"]}
     assert ("meridian:C001", "policy:POL-003", "FAILS_POLICY") in edges
 
+    # The SAME_AS/HAS_PRECEDENT/HAS_DECISION traversal is staged as
+    # graphSteps, one hop at a time -- see graph_data.build_precedent_steps.
+    assert result["graphSteps"]
+    step_nodes = {n["id"]: n for step in result["graphSteps"] for n in step["graph"]["nodes"]}
+    decision_node = next(n for n in step_nodes.values() if n["group"] == "context" and n["id"].startswith("context:decision:"))
+    assert decision_node["color"] == graph_data._RISK_COLOR
+
 
 def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_session):
     fake_session.when("c.customerType AS customerType", [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}])
+    fake_session.when(
+        "r.ruleId AS ruleId, r.criterion",
+        [
+            {"ruleId": "POL-001", "criterion": "Minimum Credit Score"},
+            {"ruleId": "POL-002", "criterion": "Minimum Debt Service Coverage Ratio"},
+        ],
+    )
 
     result = chat.run_record_decision(
         fake_session, "C001", "LN-TERM", 400000, "Approve", "Clears every rule.",
@@ -448,4 +498,11 @@ def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_sess
     )
 
     assert not any(n["id"].startswith("policy:") for n in result["graph"]["nodes"])
-    assert not any("r.ruleId AS ruleId, r.criterion" in call[0] for call in fake_session.calls)
+    # Even with nothing failing, criterion text is still fetched -- it's
+    # needed for the real APPLIED_POLICY shadow-node edges record_decision
+    # writes for every applied rule, not just failed ones.
+    applied_policy_calls = [c for c in fake_session.calls if "MERGE (d)-[rel:APPLIED_POLICY]->(r)" in c[0]]
+    assert len(applied_policy_calls) == 1
+    written_rules = {r["ruleId"]: r for r in applied_policy_calls[0][1]["appliedRules"]}
+    assert written_rules["POL-001"]["criterion"] == "Minimum Credit Score"
+    assert written_rules["POL-001"]["failed"] is False

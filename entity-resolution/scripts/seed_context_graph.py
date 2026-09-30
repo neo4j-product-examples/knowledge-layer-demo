@@ -9,12 +9,25 @@ runtime by the `record_decision` chat tool, not by this script.
 
     (:Decision {decisionId, customerId, customerName, productTypeCode,
                 requestedAmount, recommendation, reasoning, appliedRuleIds,
-                escalationRole, decidedAt})
+                failedRuleIds, escalationRole, decidedAt})
+        -[:ABOUT]->           (:Customer {customerId, customerName})
+        -[:APPLIED_POLICY {failed}]-> (:PolicyRule {ruleId, criterion})
+        -[:TRIGGERED]->       (:Escalation {role})
+        -[:PRECEDENT_FOR]->   (:Decision)   -- earlier decision -> later decision
 
-No native relationship to the customer -- composite databases forbid
-relationships that span constituents, so customerId/customerName are just
-properties here; the app draws the visual link to a Customer stub node at
-render time (see graph_data.build_decision_delta).
+Composite databases forbid relationships that span constituents, so the
+Customer, PolicyRule, and Escalation nodes above are lightweight shadow
+copies living inside `context` itself (same pattern used for shadowDb),
+not references into meridian or lendingpolicy directly -- but ABOUT,
+APPLIED_POLICY, and TRIGGERED are real, native relationships, not just
+properties. PRECEDENT_FOR is discovered and written automatically
+(record_decision does this at write time for a new decision; this script
+backfills it across the seeded decisions themselves): an earlier decision
+gets a PRECEDENT_FOR edge to a later one whenever they both failed the
+same policy rule -- deterministic, not a judgment call made at query time.
+The app also still draws a visual link at render time for its own graph
+pane (see graph_data.build_decision_delta); that's a separate, UI-only
+concern from the persisted schema here.
 
 All writes are MERGE-based on decisionId, so this is safe to re-run.
 
@@ -29,22 +42,6 @@ from resolver import db
 
 DECISIONS = [
     {
-        "decisionId": "DEC-C002-SEED",
-        "customerId": "C002",
-        "customerName": "Alvarez Distribution Co",
-        "productTypeCode": "LN-TERM",
-        "requestedAmount": 150000,
-        "recommendation": "Approve",
-        "reasoning": (
-            "Credit score 712 (>= 650, POL-001), DSCR 1.41x (>= 1.25, POL-002), "
-            "loan-to-cash-flow 2.1x (<= 3.5, POL-003). KYC risk rating Low. No "
-            "delinquent facilities on the applicant or any affiliate."
-        ),
-        "appliedRuleIds": ["POL-001", "POL-002", "POL-003"],
-        "escalationRole": None,
-        "decidedAt": "2025-11-03",
-    },
-    {
         "decisionId": "DEC-C003-SEED",
         "customerId": "C003",
         "customerName": "Watts, Robinson and Nguyen",
@@ -56,6 +53,7 @@ DECISIONS = [
             "No further criteria evaluated once the credit-score threshold failed."
         ),
         "appliedRuleIds": ["POL-006"],
+        "failedRuleIds": ["POL-006"],
         "escalationRole": None,
         "decidedAt": "2025-12-11",
     },
@@ -71,6 +69,7 @@ DECISIONS = [
             "Line of credit sized conservatively relative to trailing cash flow."
         ),
         "appliedRuleIds": ["POL-008", "POL-009"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-01-22",
     },
@@ -89,6 +88,7 @@ DECISIONS = [
             "applicant's own standing."
         ),
         "appliedRuleIds": ["POL-001", "POL-002", "POL-005"],
+        "failedRuleIds": ["POL-005"],
         "escalationRole": "Credit Risk Committee",
         "decidedAt": "2026-02-18",
     },
@@ -104,6 +104,7 @@ DECISIONS = [
             "for commercial real estate loans (POL-010)."
         ),
         "appliedRuleIds": ["POL-010"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-03-30",
     },
@@ -120,13 +121,63 @@ DECISIONS = [
             "being provided before disbursement."
         ),
         "appliedRuleIds": ["POL-011"],
+        "failedRuleIds": [],
         "escalationRole": None,
         "decidedAt": "2026-05-14",
+    },
+    {
+        "decisionId": "DEC-C009-SEED",
+        "customerId": "C009",
+        "customerName": "Cannon, Anderson and Alvarez",
+        "productTypeCode": "LN-TERM",
+        "requestedAmount": 450000,
+        "recommendation": "Decline",
+        "reasoning": (
+            "Credit score 701 and KYC risk rating Low both cleared policy "
+            "(POL-001, POL-004), but the requested $450,000 came in at roughly "
+            "4.1x trailing annual net cash flow, over the 3.5x loan-to-cash-flow "
+            "cap (POL-003). Declined as structured; invited to reapply at an "
+            "amount consistent with the cap."
+        ),
+        "appliedRuleIds": ["POL-001", "POL-003", "POL-004"],
+        "failedRuleIds": ["POL-003"],
+        "escalationRole": None,
+        "decidedAt": "2026-04-10",
+    },
+    {
+        "decisionId": "DEC-C010-SEED",
+        "customerId": "C010",
+        "customerName": "Santos, Kim and Holmes",
+        "productTypeCode": "LN-TERM",
+        "requestedAmount": 380000,
+        "recommendation": "Approve",
+        "reasoning": (
+            "Credit score 735 (Good), DSCR 1.38x (>= 1.25, POL-002), "
+            "loan-to-cash-flow 2.6x (<= 3.5, POL-003). KYC risk rating Low, "
+            "no delinquent facilities on the applicant or any affiliate. "
+            "Approved as requested."
+        ),
+        "appliedRuleIds": ["POL-001", "POL-002", "POL-003", "POL-004", "POL-005"],
+        "failedRuleIds": [],
+        "escalationRole": None,
+        "decidedAt": "2026-04-25",
     },
 ]
 
 driver = db.get_driver()
 with db.get_session(driver) as session:
+    # DEC-C002-SEED (Alvarez Distribution Co, Approve) was retired -- Alvarez
+    # is the delinquent affiliate in Rosa's own case, and a clean historical
+    # approval for that same company read as a contradiction. MERGE only
+    # adds/updates, so it has to be deleted explicitly.
+    session.run(
+        """
+        USE meridianComposite.context
+        MATCH (d:Decision {decisionId: 'DEC-C002-SEED'})
+        DETACH DELETE d
+        """
+    )
+
     session.run(
         """
         USE meridianComposite.context
@@ -136,9 +187,84 @@ with db.get_session(driver) as session:
             d.productTypeCode = row.productTypeCode, d.requestedAmount = row.requestedAmount,
             d.recommendation = row.recommendation, d.reasoning = row.reasoning,
             d.appliedRuleIds = row.appliedRuleIds, d.escalationRole = row.escalationRole,
-            d.decidedAt = row.decidedAt
+            d.failedRuleIds = row.failedRuleIds, d.decidedAt = row.decidedAt
+        MERGE (c:Customer {customerId: row.customerId})
+        SET c.customerName = row.customerName
+        MERGE (d)-[:ABOUT]->(c)
         """,
         rows=DECISIONS,
+    )
+
+    # Real APPLIED_POLICY edges to shadow PolicyRule nodes living inside
+    # `context` itself (same shadow-node pattern used for shadowDb) --
+    # composite databases forbid relationships that cross into the
+    # separate lendingpolicy constituent, so this is a lightweight copy
+    # (just ruleId + criterion), not a reference into it directly. Pull
+    # the real criterion text from lendingpolicy so these shadow nodes
+    # aren't just bare rule IDs.
+    rule_rows = session.run(
+        """
+        USE meridianComposite.lendingpolicy
+        MATCH (r:PolicyRule)
+        RETURN r.ruleId AS ruleId, r.criterion AS criterion
+        """
+    )
+    criterion_by_rule_id = {row["ruleId"]: row["criterion"] for row in rule_rows}
+
+    applied_policy_rows = [
+        {
+            "decisionId": decision["decisionId"],
+            "ruleId": rule_id,
+            "criterion": criterion_by_rule_id.get(rule_id, rule_id),
+            "failed": rule_id in decision["failedRuleIds"],
+        }
+        for decision in DECISIONS
+        for rule_id in decision["appliedRuleIds"]
+    ]
+    session.run(
+        """
+        USE meridianComposite.context
+        UNWIND $rows AS row
+        MATCH (d:Decision {decisionId: row.decisionId})
+        MERGE (r:PolicyRule {ruleId: row.ruleId})
+        SET r.criterion = row.criterion
+        MERGE (d)-[rel:APPLIED_POLICY]->(r)
+        SET rel.failed = row.failed
+        """,
+        rows=applied_policy_rows,
+    )
+
+    # Escalation shadow nodes + TRIGGERED edges, same pattern as Customer/
+    # PolicyRule -- shared/deduplicated by role, so "every decision that
+    # ever triggered Credit Risk Committee" is a real traversal too.
+    escalation_rows = [
+        {"decisionId": decision["decisionId"], "escalationRole": decision["escalationRole"]}
+        for decision in DECISIONS
+        if decision["escalationRole"]
+    ]
+    if escalation_rows:
+        session.run(
+            """
+            USE meridianComposite.context
+            UNWIND $rows AS row
+            MATCH (d:Decision {decisionId: row.decisionId})
+            MERGE (e:Escalation {role: row.escalationRole})
+            MERGE (d)-[:TRIGGERED]->(e)
+            """,
+            rows=escalation_rows,
+        )
+
+    # Backfill PRECEDENT_FOR across the seeded decisions themselves, same
+    # rule record_decision applies at write time: an earlier decision that
+    # failed a rule is precedent for a later decision that failed the same
+    # rule. Ordered by decidedAt so precedent only flows forward in time.
+    session.run(
+        """
+        USE meridianComposite.context
+        MATCH (a:Decision)-[:APPLIED_POLICY {failed: true}]->(rule:PolicyRule)<-[:APPLIED_POLICY {failed: true}]-(b:Decision)
+        WHERE a.decidedAt < b.decidedAt
+        MERGE (a)-[:PRECEDENT_FOR]->(b)
+        """
     )
 
     result = session.run(
@@ -147,6 +273,15 @@ with db.get_session(driver) as session:
         MATCH (d:Decision)
         RETURN d.productTypeCode AS productType, d.recommendation AS recommendation, count(*) AS count
         ORDER BY productType
+        """
+    )
+    for row in result:
+        print(dict(row))
+
+    result = session.run(
+        """
+        USE meridianComposite.context
+        MATCH ()-[r]->() RETURN type(r) AS relType, count(*) AS count ORDER BY relType
         """
     )
     for row in result:

@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import os
+import time
 
 import anthropic
 from dotenv import load_dotenv
@@ -17,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 BLOOM_URL = os.environ.get("BLOOM_URL", "")
 CHAT_MODEL = os.environ.get("ANTHROPIC_CHAT_MODEL", "claude-sonnet-5")
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 9
+# get_decision_history now depends on get_lending_policy's result (it needs
+# to know which rules failed), so it can no longer batch into an earlier,
+# independent round -- that's one more required round-trip than before,
+# and the risk/credit bundle sometimes doesn't fully batch either.
 # The whole demo is built around this one applicant -- reset her own
 # recorded decision on every page load so one run's recommendation never
 # carries over into the next (see index()). Seeded historical decisions for
@@ -281,20 +286,48 @@ def chat():
                         if block.type != "tool_use":
                             continue
                         result = chat_tools.run_tool(block.name, block.input, session)
+                        # graphSteps (currently only record_decision) is an
+                        # ordered list of small deltas meant to be revealed
+                        # one at a time -- e.g. the real precedent chain,
+                        # hop by hop -- instead of landing in one frame.
+                        # Neither field goes to Claude: pop both before the
+                        # result is JSON-encoded into the tool_result below.
+                        graph_steps = result.pop("graphSteps", None) or []
                         graph_delta = result.pop("graph", None)
-                        if graph_delta:
-                            graph_deltas.append(graph_delta)
+                        all_deltas = ([graph_delta] if graph_delta else []) + [s["graph"] for s in graph_steps]
+                        if all_deltas:
+                            graph_deltas.append(chat_tools.merge_graph_deltas(all_deltas))
                         step_count += 1
                         # Sent the instant this tool call actually finishes,
                         # not batched up for later -- this is the real-time
                         # progress the client renders live.
-                        yield _sse_event({
-                            "type": "step",
-                            "tool": block.name,
-                            "label": chat_tools.describe_tool_call(block.name, block.input),
-                            "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
-                            "graph": graph_delta or {"nodes": [], "edges": []},
-                        })
+                        if graph_steps:
+                            if graph_delta and (graph_delta.get("nodes") or graph_delta.get("edges")):
+                                yield _sse_event({
+                                    "type": "step",
+                                    "tool": block.name,
+                                    "label": chat_tools.describe_tool_call(block.name, block.input),
+                                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                                    "graph": graph_delta,
+                                })
+                            for i, step in enumerate(graph_steps):
+                                yield _sse_event({
+                                    "type": "step",
+                                    "tool": block.name,
+                                    "label": step["label"],
+                                    "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                                    "graph": step["graph"],
+                                })
+                                if i < len(graph_steps) - 1:
+                                    time.sleep(0.4)
+                        else:
+                            yield _sse_event({
+                                "type": "step",
+                                "tool": block.name,
+                                "label": chat_tools.describe_tool_call(block.name, block.input),
+                                "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                                "graph": graph_delta or {"nodes": [], "edges": []},
+                            })
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
