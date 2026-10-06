@@ -447,31 +447,6 @@ def fetch_lending_policy_rules(session, product_type_code):
     return [dict(r) for r in result]
 
 
-def fetch_decision_history(session, product_type_code, customer_id=None):
-    """Past Decision nodes from the context constituent (separate AuraDB,
-    not meridian/documents/lendingpolicy) -- Meridian's own history of loan
-    recommendations, so a new recommendation can cite precedent ("have we
-    approved similar loans before, and why") instead of reasoning about this
-    application in isolation. Matches on product type (peer decisions) OR
-    this specific customer's own past decisions, whichever applies."""
-    result = session.run(
-        """
-        USE meridianComposite.context
-        MATCH (d:Decision)
-        WHERE d.productTypeCode = $productTypeCode OR d.customerId = $customerId
-        RETURN d.decisionId AS decisionId, d.customerId AS customerId,
-               d.customerName AS customerName, d.productTypeCode AS productTypeCode,
-               d.requestedAmount AS requestedAmount, d.recommendation AS recommendation,
-               d.reasoning AS reasoning, d.appliedRuleIds AS appliedRuleIds,
-               d.escalationRole AS escalationRole, d.failedRuleIds AS failedRuleIds,
-               d.decidedAt AS decidedAt
-        ORDER BY d.decidedAt DESC
-        """,
-        productTypeCode=product_type_code, customerId=customer_id,
-    )
-    return [dict(r) for r in result]
-
-
 def clear_customer_decisions(session, customer_id):
     """Deletes any recorded Decision nodes for one customer from the context
     constituent. Used to reset Rosa's Bakery's own decision to blank on every
@@ -488,10 +463,61 @@ def clear_customer_decisions(session, customer_id):
     )
 
 
+def find_precedents_for_failed_rules(session, failed_rule_ids, exclude_decision_id=None):
+    """Real precedent lookup: every past Decision with a real
+    APPLIED_POLICY {failed: true} edge to any of the given policy rules.
+    Pure read -- doesn't need the decision that's asking to exist yet, so
+    chat.run_get_decision_history calls this to surface precedent BEFORE
+    a recommendation is written (so it can actually inform the
+    recommendation), and record_decision calls it again once the new
+    decision exists, purely to persist the PRECEDENT_FOR edge for future
+    lookups. Returns a list of dicts (decisionId, customerId,
+    customerName, recommendation, reasoning, escalationRole, ruleId,
+    ruleCriterion) -- one row per shared rule, so a decision that shares
+    two rules in common can appear twice. Empty if failed_rule_ids is
+    empty or nothing matches."""
+    if not failed_rule_ids:
+        return []
+    result = session.run(
+        """
+        USE meridianComposite.context
+        MATCH (rule:PolicyRule)
+        WHERE rule.ruleId IN $failedRuleIds
+        MATCH (rule)<-[:APPLIED_POLICY {failed: true}]-(priorDecision:Decision)
+        WHERE priorDecision.decisionId <> $excludeDecisionId
+        RETURN DISTINCT priorDecision.decisionId AS decisionId, priorDecision.customerId AS customerId,
+               priorDecision.customerName AS customerName, priorDecision.recommendation AS recommendation,
+               priorDecision.reasoning AS reasoning, priorDecision.escalationRole AS escalationRole,
+               rule.ruleId AS ruleId, rule.criterion AS ruleCriterion
+        """,
+        failedRuleIds=failed_rule_ids, excludeDecisionId=exclude_decision_id or "",
+    )
+    return [dict(r) for r in result]
+
+
 def record_decision(session, decision):
     """Persists one recommendation to the context constituent (MERGE on
     decisionId, so re-recording the same decisionId updates it in place
-    rather than duplicating)."""
+    rather than duplicating).
+
+    Also materializes real ABOUT, APPLIED_POLICY, and TRIGGERED
+    relationships to Customer/PolicyRule/Escalation nodes living inside
+    `context` itself -- composite databases forbid relationships that
+    cross constituents, so these are lightweight shadow copies (just the
+    id and a display field, nothing sensitive), not references into
+    meridian or lendingpolicy directly. decision's optional "appliedRules"
+    key is a list of {ruleId, criterion, failed} dicts (see
+    chat.run_record_decision) -- without it, only the Decision node and
+    its ABOUT edge are written.
+
+    Also re-runs find_precedents_for_failed_rules (the same lookup
+    chat.run_get_decision_history already used, earlier this turn, to
+    actually inform the recommendation) and gives each match a real,
+    permanent PRECEDENT_FOR edge to this decision (Decision
+    -[:PRECEDENT_FOR]-> Decision). This makes precedent a persisted fact
+    of the graph rather than something re-derived by judgment on every
+    later query. Returns that same list of prior decisions -- empty if
+    this decision didn't fail anything a past decision also failed."""
     session.run(
         """
         USE meridianComposite.context
@@ -501,9 +527,54 @@ def record_decision(session, decision):
             d.recommendation = $recommendation, d.reasoning = $reasoning,
             d.appliedRuleIds = $appliedRuleIds, d.escalationRole = $escalationRole,
             d.failedRuleIds = $failedRuleIds, d.decidedAt = $decidedAt
+        MERGE (c:Customer {customerId: $customerId})
+        SET c.customerName = $customerName
+        MERGE (d)-[:ABOUT]->(c)
         """,
         **decision,
     )
+    applied_rules = decision.get("appliedRules") or []
+    if applied_rules:
+        session.run(
+            """
+            USE meridianComposite.context
+            MATCH (d:Decision {decisionId: $decisionId})
+            UNWIND $appliedRules AS rule
+            MERGE (r:PolicyRule {ruleId: rule.ruleId})
+            SET r.criterion = rule.criterion
+            MERGE (d)-[rel:APPLIED_POLICY]->(r)
+            SET rel.failed = rule.failed
+            """,
+            decisionId=decision["decisionId"], appliedRules=applied_rules,
+        )
+
+    if decision.get("escalationRole"):
+        session.run(
+            """
+            USE meridianComposite.context
+            MATCH (d:Decision {decisionId: $decisionId})
+            MERGE (e:Escalation {role: $escalationRole})
+            MERGE (d)-[:TRIGGERED]->(e)
+            """,
+            decisionId=decision["decisionId"], escalationRole=decision["escalationRole"],
+        )
+
+    precedents = find_precedents_for_failed_rules(
+        session, decision.get("failedRuleIds") or [], exclude_decision_id=decision["decisionId"],
+    )
+    if precedents:
+        session.run(
+            """
+            USE meridianComposite.context
+            MATCH (newDecision:Decision {decisionId: $decisionId})
+            UNWIND $priorDecisionIds AS priorDecisionId
+            MATCH (priorDecision:Decision {decisionId: priorDecisionId})
+            MERGE (priorDecision)-[:PRECEDENT_FOR]->(newDecision)
+            """,
+            decisionId=decision["decisionId"],
+            priorDecisionIds=list({p["decisionId"] for p in precedents}),
+        )
+    return precedents
 
 
 def fetch_document_ownership(session):

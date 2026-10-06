@@ -285,7 +285,7 @@ def test_build_lending_policy_delta_handles_no_rules():
     assert delta == {"nodes": [], "edges": []}
 
 
-def test_build_policy_failure_delta_flags_failed_rule_red():
+def test_build_policy_failure_delta_flags_failed_rule():
     failed_rules = [
         {"ruleId": "POL-003", "criterion": "Maximum Loan Amount to Annual Cash Flow"},
     ]
@@ -307,7 +307,7 @@ def test_build_policy_failure_delta_handles_no_failed_rules():
     assert delta == {"nodes": [], "edges": []}
 
 
-def test_build_decision_delta_connects_each_decision_to_its_own_customer():
+def test_build_decision_delta_colors_by_outcome_with_no_customer_edge():
     decisions = [
         {
             "decisionId": "DEC-C005-SEED", "customerId": "C005", "customerName": "Snyder, Campos and Callahan",
@@ -322,53 +322,131 @@ def test_build_decision_delta_connects_each_decision_to_its_own_customer():
     delta = graph_data.build_decision_delta(decisions)
 
     nodes_by_id = {n["id"]: n for n in delta["nodes"]}
-    assert nodes_by_id["meridian:C005"]["label"] == "Customer: C005"
     assert nodes_by_id["context:DEC-C005-SEED"]["label"] == "Escalate: Snyder, Campos and Callahan"
+    # Escalate counts as a fail outcome (it only happens because a rule
+    # failed) -- red. Approve is a pass -- green. No customer node at all:
+    # which customer a decision was about is a property, not a rendered edge.
     assert nodes_by_id["context:DEC-C005-SEED"]["color"] == graph_data._RISK_COLOR
-    assert nodes_by_id["context:DEC-C002-SEED"]["color"] == graph_data._GROUP_COLORS["context"]
-
-    edges = {(e["from"], e["to"], e["label"], e["dashes"]) for e in delta["edges"]}
-    assert ("meridian:C005", "context:DEC-C005-SEED", "HAS_DECISION", False) in edges
-    assert ("meridian:C002", "context:DEC-C002-SEED", "HAS_DECISION", False) in edges
-    # No current_customer_id was given, so no CITED_AS_PRECEDENT edges.
-    assert all(e[2] != "CITED_AS_PRECEDENT" for e in edges)
-
-
-def test_build_decision_delta_adds_precedent_edge_for_other_customers():
-    decisions = [
-        {
-            "decisionId": "DEC-C005-SEED", "customerId": "C005", "customerName": "Snyder, Campos and Callahan",
-            "recommendation": "Escalate", "reasoning": "Affiliate delinquency.", "escalationRole": "Credit Risk Committee",
-        },
-    ]
-
-    delta = graph_data.build_decision_delta(decisions, current_customer_id="C001")
-
-    nodes_by_id = {n["id"]: n for n in delta["nodes"]}
-    assert "meridian:C001" in nodes_by_id
-
-    edges = {(e["from"], e["to"], e["label"], e["dashes"]) for e in delta["edges"]}
-    assert ("meridian:C001", "context:DEC-C005-SEED", "CITED_AS_PRECEDENT", True) in edges
-
-
-def test_build_decision_delta_skips_precedent_edge_for_same_customer():
-    decisions = [
-        {
-            "decisionId": "DEC-C001-1", "customerId": "C001", "customerName": "Rosas Bakery",
-            "recommendation": "Escalate", "reasoning": "...", "escalationRole": "Credit Risk Committee",
-        },
-    ]
-
-    delta = graph_data.build_decision_delta(decisions, current_customer_id="C001")
-
-    labels = {e["label"] for e in delta["edges"]}
-    assert "CITED_AS_PRECEDENT" not in labels
+    assert nodes_by_id["context:DEC-C002-SEED"]["color"] == graph_data._PASS_COLOR
+    assert "meridian:C005" not in nodes_by_id
+    assert "meridian:C002" not in nodes_by_id
+    assert delta["edges"] == []
 
 
 def test_build_decision_delta_handles_no_decisions():
     delta = graph_data.build_decision_delta([])
 
     assert delta == {"nodes": [], "edges": []}
+
+
+def _flatten_steps(steps):
+    nodes = {}
+    edges = []
+    for step in steps:
+        for n in step["graph"]["nodes"]:
+            nodes[n["id"]] = n
+        edges.extend(step["graph"]["edges"])
+    return nodes, edges
+
+
+def test_build_rule_precedent_steps_cites_rule_then_case_then_outcome():
+    precedents = [
+        {
+            "decisionId": "DEC-C009-SEED", "customerId": "C009", "customerName": "Cannon, Anderson and Alvarez",
+            "recommendation": "Decline", "reasoning": "Over the cap too.", "escalationRole": None,
+            "ruleId": "POL-003", "ruleCriterion": "Maximum Loan Amount to Annual Cash Flow",
+        },
+    ]
+
+    steps = graph_data.build_rule_precedent_steps(precedents)
+    nodes_by_id, edge_list = _flatten_steps(steps)
+    edges = {(e["from"], e["to"], e["label"]) for e in edge_list}
+
+    # The real rule -[:SAME_AS]-> its shadow copy in context.
+    assert ("policy:POL-003", "context:policy:POL-003", "SAME_AS") in edges
+    # The shadow copy -[:HAS_PRECEDENT]-> the case (not the decision).
+    assert ("context:policy:POL-003", "context:case:DEC-C009-SEED", "HAS_PRECEDENT") in edges
+    # The case -[:HAS_DECISION]-> its own separate decision/outcome node.
+    assert ("context:case:DEC-C009-SEED", "context:decision:DEC-C009-SEED", "HAS_DECISION") in edges
+
+    assert not any(nid.startswith("meridian:") for nid in nodes_by_id)
+    # Only the real PolicyRule node (in the policy graph) flags red --
+    # its context shadow copy stays plain context-purple.
+    assert nodes_by_id["context:policy:POL-003"]["color"] == graph_data._GROUP_COLORS["context"]
+    assert nodes_by_id["context:case:DEC-C009-SEED"]["color"] == graph_data._GROUP_COLORS["context"]
+    assert nodes_by_id["context:decision:DEC-C009-SEED"]["color"] == graph_data._RISK_COLOR
+    assert nodes_by_id["context:decision:DEC-C009-SEED"]["label"] == "Decline"
+
+    labels = [s["label"] for s in steps]
+    assert labels == [
+        "Citing POL-003 in context graph",
+        "Found precedent: Cannon, Anderson and Alvarez",
+        "Precedent outcome: Decline",
+    ]
+
+
+def test_build_rule_precedent_steps_groups_by_rule():
+    precedents = [
+        {
+            "decisionId": "DEC-A", "customerId": "C005", "customerName": "A", "recommendation": "Decline",
+            "reasoning": "...", "escalationRole": None, "ruleId": "POL-003", "ruleCriterion": "...",
+        },
+        {
+            "decisionId": "DEC-B", "customerId": "C006", "customerName": "B", "recommendation": "Decline",
+            "reasoning": "...", "escalationRole": None, "ruleId": "POL-003", "ruleCriterion": "...",
+        },
+    ]
+
+    steps = graph_data.build_rule_precedent_steps(precedents)
+    _, edge_list = _flatten_steps(steps)
+
+    same_as_edges = [e for e in edge_list if e["label"] == "SAME_AS"]
+    assert len(same_as_edges) == 1
+    found_labels = [s["label"] for s in steps if s["label"].startswith("Found precedent")]
+    assert len(found_labels) == 2
+
+
+def test_build_rule_precedent_steps_handles_no_precedents():
+    assert graph_data.build_rule_precedent_steps([]) == []
+
+
+def test_build_new_case_steps_links_every_failed_rule_with_one_final_outcome():
+    new_decision = {
+        "decisionId": "DEC-C001-1", "customerId": "C001", "customerName": "Rosas Bakery",
+        "recommendation": "Decline", "reasoning": "...", "escalationRole": None,
+    }
+    failed_rules = [
+        {"ruleId": "POL-003", "criterion": "Maximum Loan Amount to Annual Cash Flow"},
+        {"ruleId": "POL-005", "criterion": "No Delinquent Facility"},
+    ]
+
+    steps = graph_data.build_new_case_steps(new_decision, failed_rules)
+    nodes_by_id, edge_list = _flatten_steps(steps)
+    edges = {(e["from"], e["to"], e["label"]) for e in edge_list}
+
+    # Both shadow rules (and their SAME_AS edges) get created fresh here,
+    # since no precedent lookup necessarily ran for either.
+    assert ("policy:POL-003", "context:policy:POL-003", "SAME_AS") in edges
+    assert ("policy:POL-005", "context:policy:POL-005", "SAME_AS") in edges
+    assert ("context:policy:POL-003", "context:case:DEC-C001-1", "HAS_PRECEDENT") in edges
+    assert ("context:policy:POL-005", "context:case:DEC-C001-1", "HAS_PRECEDENT") in edges
+    assert ("context:case:DEC-C001-1", "context:decision:DEC-C001-1", "HAS_DECISION") in edges
+
+    assert not any(nid.startswith("meridian:") for nid in nodes_by_id)
+    assert nodes_by_id["context:case:DEC-C001-1"]["color"] == graph_data._GROUP_COLORS["context"]
+    assert nodes_by_id["context:decision:DEC-C001-1"]["color"] == graph_data._RISK_COLOR
+
+    # Only one final outcome step, even though two rules failed.
+    outcome_steps = [s for s in steps if s["label"].startswith("Outcome:")]
+    assert len(outcome_steps) == 1
+    labels = [s["label"] for s in steps]
+    assert labels == ["Linking this case to POL-003", "Linking this case to POL-005", "Outcome: Decline"]
+
+
+def test_build_new_case_steps_handles_no_failed_rules():
+    steps = graph_data.build_new_case_steps({"decisionId": "DEC-C001-1", "recommendation": "Approve"}, [])
+
+    assert steps == []
 
 
 def test_build_vis_graph_handles_node_with_no_edges():

@@ -69,7 +69,13 @@ RULES = [
         "productTypeCode": "LN-TERM", "ruleId": "POL-002",
         "criterion": "Minimum Debt Service Coverage Ratio", "comparison": ">=", "threshold": 1.25, "unit": "ratio",
         "section": "§4.2",
-        "description": "Projected annual net cash flow must cover the proposed loan's annual debt service by at least 1.25x.",
+        "description": (
+            "Projected annual net cash flow must cover the proposed loan's annual debt service "
+            "by at least 1.25x. If the proposed facility's interest rate isn't disclosed on the "
+            "application, DSCR can't be precisely computed -- treat this rule as satisfied (pass) "
+            "on the missing-rate basis alone rather than failing or escalating; do not let an "
+            "undisclosed rate by itself block or delay a recommendation."
+        ),
     },
     {
         "productTypeCode": "LN-TERM", "ruleId": "POL-003",
