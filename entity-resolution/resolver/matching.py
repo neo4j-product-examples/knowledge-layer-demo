@@ -8,6 +8,7 @@ matching logic fully unit-testable without a live database.
 """
 import re
 
+from neo4j.graph import Node, Path, Relationship
 from rapidfuzz import fuzz
 
 FUZZY_THRESHOLD = 0.85
@@ -590,3 +591,85 @@ def fetch_document_ownership(session):
         """
     )
     return [dict(r) for r in result]
+
+
+# The five real data constituents an ontology-guided query may target --
+# "ontology" itself is deliberately excluded (that's get_schema_help's own
+# job, via ontology.fetch_schema_help) so this tool can't be used to poke
+# at the meta-graph instead of real data.
+ONTOLOGY_QUERY_CONSTITUENTS = {"meridian", "documents", "lendingpolicy", "context", "shadowdb"}
+
+# A model-authored Cypher fragment is rejected outright if it contains any
+# of these, regardless of what it was trying to do -- this tool is
+# read-only by construction, not by trusting the caller's intent. CALL is
+# blocked wholesale (including the read-only CALL {...} subquery form)
+# since telling those apart from a procedure call reliably isn't worth
+# the complexity for a demo-scale ad-hoc lookup tool.
+_FORBIDDEN_CYPHER_KEYWORDS = ("CREATE", "MERGE", "SET", "DELETE", "REMOVE", "DROP", "CALL", "LOAD CSV", "FOREACH")
+_LIMIT_CLAUSE = re.compile(r"\bLIMIT\s+\d+\b", re.IGNORECASE)
+_QUERY_ROW_LIMIT = 25
+
+
+def query_constituent(session, constituent, cypher):
+    """Ad-hoc, read-only lookup against one of the five real data
+    constituents, for analyst questions that fall outside the fixed tool
+    set (see chat.run_ontology_guided_query) -- meant to be used after
+    ontology.fetch_schema_help confirms the labels/relationships involved
+    are real, not as a free pass to run anything. Three things this never
+    trusts the caller to get right on its own:
+
+    - the USE clause: always prepended here, from the closed
+      ONTOLOGY_QUERY_CONSTITUENTS set, so a query can't target a
+      different database or the ontology/shadow internals directly;
+    - write/procedure keywords: rejected outright (ValueError) -- see
+      _FORBIDDEN_CYPHER_KEYWORDS;
+    - row count: any existing LIMIT clause is stripped and replaced with
+      a hard cap (_QUERY_ROW_LIMIT), so a broad match can't dump an
+      unbounded result into the conversation.
+
+    Returns the raw rows as plain dicts, with any neo4j temporal value
+    (Date/DateTime/Duration, ...) stringified so the result is always
+    JSON-serializable regardless of what the query happened to return."""
+    if constituent not in ONTOLOGY_QUERY_CONSTITUENTS:
+        raise ValueError(
+            f"Unknown constituent {constituent!r} -- must be one of {sorted(ONTOLOGY_QUERY_CONSTITUENTS)}."
+        )
+
+    upper = cypher.upper()
+    for keyword in _FORBIDDEN_CYPHER_KEYWORDS:
+        pattern = r"(?<![A-Za-z0-9_])" + re.escape(keyword) + r"(?![A-Za-z0-9_])"
+        if re.search(pattern, upper):
+            raise ValueError(
+                f"'{keyword}' isn't allowed here -- query_constituent is read-only. "
+                "Write a MATCH/RETURN query with no writes or procedure calls."
+            )
+
+    capped_cypher = _LIMIT_CLAUSE.sub("", cypher.strip().rstrip(";"))
+    full_query = f"USE meridianComposite.{constituent}\n{capped_cypher}\nLIMIT {_QUERY_ROW_LIMIT}"
+    result = session.run(full_query)
+    return [{key: _serialize_cypher_value(value) for key, value in dict(row).items()} for row in result]
+
+
+def _serialize_cypher_value(value):
+    """An ontology-guided query's RETURN clause is the model's own
+    Cypher, not a fixed, known shape like every other query in this file
+    -- it might return a whole Node/Relationship/Path (e.g. `RETURN p`
+    instead of `RETURN p.name`), a list of them, or a plain temporal
+    value, none of which json.dumps can serialize on their own. Recurses
+    into lists/dicts so a query returning e.g. collect(p) still works."""
+    if isinstance(value, Node):
+        return {"__labels__": list(value.labels), **dict(value)}
+    if isinstance(value, Relationship):
+        return {"__type__": value.type, **dict(value)}
+    if isinstance(value, Path):
+        return {
+            "nodes": [_serialize_cypher_value(n) for n in value.nodes],
+            "relationships": [_serialize_cypher_value(r) for r in value.relationships],
+        }
+    if isinstance(value, list):
+        return [_serialize_cypher_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _serialize_cypher_value(v) for k, v in value.items()}
+    if type(value).__module__.startswith("neo4j.time"):
+        return str(value)
+    return value

@@ -506,3 +506,44 @@ def test_run_record_decision_without_failed_rules_has_no_failure_nodes(fake_sess
     written_rules = {r["ruleId"]: r for r in applied_policy_calls[0][1]["appliedRules"]}
     assert written_rules["POL-001"]["criterion"] == "Minimum Credit Score"
     assert written_rules["POL-001"]["failed"] is False
+
+
+def test_run_get_schema_help_delegates_to_ontology(fake_session):
+    fake_session.when(
+        "MATCH (p:DataProduct)",
+        [{"productId": "context", "name": "Decision History", "backend": "...", "description": "..."}],
+    )
+
+    result = chat.run_get_schema_help(fake_session)
+
+    assert result["hubs"][0]["productId"] == "context"
+
+
+def test_run_ontology_guided_query_returns_rows_on_success(fake_session):
+    fake_session.when("RETURN c.customerName", [{"customerName": "Rosas Bakery"}])
+
+    result = chat.run_ontology_guided_query(fake_session, "meridian", "MATCH (c:Customer) RETURN c.customerName")
+
+    assert result == {"constituent": "meridian", "rows": [{"customerName": "Rosas Bakery"}]}
+
+
+def test_run_ontology_guided_query_returns_error_instead_of_raising(fake_session):
+    result = chat.run_ontology_guided_query(fake_session, "meridian", "MATCH (n) DELETE n")
+
+    assert result["constituent"] == "meridian"
+    assert "error" in result
+    assert fake_session.calls == []
+
+
+def test_run_tool_dispatches_schema_help_and_ontology_query(fake_session):
+    fake_session.when(
+        "MATCH (p:DataProduct)",
+        [{"productId": "meridian", "name": "...", "backend": "...", "description": "..."}],
+    )
+    fake_session.when("RETURN 1", [{"n": 1}])
+
+    help_result = chat.run_tool("get_schema_help", {}, fake_session)
+    query_result = chat.run_tool("ontology_guided_query", {"constituent": "meridian", "cypher": "MATCH (n) RETURN 1"}, fake_session)
+
+    assert "hubs" in help_result
+    assert query_result == {"constituent": "meridian", "rows": [{"n": 1}]}

@@ -86,3 +86,56 @@ def fetch_ontology_graph(session):
     ]
 
     return {"nodes": nodes, "edges": hub_edges + membership_edges + entity_edges}
+
+
+def fetch_schema_help(session, constituent=None):
+    """Scoped-down ontology lookup for the chat tools (see
+    chat.run_get_schema_help) -- the same underlying meta-graph as
+    fetch_ontology_graph, but shaped for a model to read before trusting a
+    label/relationship name or writing an ontology-guided query (see
+    matching.query_constituent), rather than the full graph the static
+    "View Ontology" panel renders.
+
+    With no constituent, returns just the five hub summaries (name,
+    backend, one-line description) -- the map, not the detail, so the
+    model can pick a constituent before drilling in. With a constituent
+    (e.g. "context"), returns that hub's own real SchemaEntities and the
+    real RELATES relationships between them -- the real labels and
+    relationship type names a query against that constituent can use."""
+    if not constituent:
+        hubs = [
+            dict(row) for row in session.run(
+                """
+                USE meridianComposite.ontology
+                MATCH (p:DataProduct)
+                RETURN p.productId AS productId, p.name AS name, p.backend AS backend,
+                       p.description AS description
+                ORDER BY p.productId
+                """
+            )
+        ]
+        return {"hubs": hubs}
+
+    entities = [
+        dict(row) for row in session.run(
+            """
+            USE meridianComposite.ontology
+            MATCH (e:SchemaEntity {productId: $constituent})
+            RETURN e.entityId AS entityId, e.name AS name, e.description AS description
+            ORDER BY e.entityId
+            """,
+            constituent=constituent,
+        )
+    ]
+    relationships = [
+        dict(row) for row in session.run(
+            """
+            USE meridianComposite.ontology
+            MATCH (a:SchemaEntity {productId: $constituent})-[r:RELATES]->(b:SchemaEntity)
+            RETURN a.entityId AS fromId, r.label AS label, b.entityId AS toId, r.description AS description
+            ORDER BY a.entityId, r.label
+            """,
+            constituent=constituent,
+        )
+    ]
+    return {"constituent": constituent, "entities": entities, "relationships": relationships}
