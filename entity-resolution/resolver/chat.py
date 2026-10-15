@@ -3,7 +3,7 @@ wrapping the same functions the earlier scripted UI called directly, so the
 model picks which action to take instead of the UI hardcoding two steps."""
 import datetime
 
-from resolver import graph_data, matching, shadow_nodes
+from resolver import graph_data, matching, ontology, shadow_nodes
 
 SYSTEM_PROMPT = """You are an assistant embedded in a graph exploration tool for a bank analyst.
 
@@ -34,6 +34,14 @@ reasoning about creditworthiness in the abstract. If any policy rule references
 affiliates, related entities, or common ownership, you must call
 find_parent_companies for this customer to check them -- do not assume the
 applicant's own facilities are the only ones that rule applies to.
+
+For any rule that caps the loan amount against ANNUAL cash flow (e.g. POL-003), use
+get_customer_transaction_summary's own "annualizedNetCashFlow" field, not "netCashFlow"
+(which is the raw total over whatever span of transaction history happens to be on
+file, almost never exactly one year) and not your own arithmetic on the date range --
+the tool already does that division for you, deterministically. Comparing the
+requested amount against the raw, un-annualized total understates the true ratio and
+can turn a real policy failure into a false pass.
 
 Your final written answer for a loan recommendation must ALWAYS include, in that
 same answer, a markdown table with one row per policy rule you checked: the rule
@@ -82,7 +90,17 @@ get_business_plan_details is the applicant's own account of the loan (their stat
 use of proceeds, market and repayment rationale) -- it is not Meridian's system of
 record. Note where it corroborates or conflicts with Meridian's own data (the formal
 application, transactions, credit history); don't treat the two as interchangeable
-sources or blend them into one unsourced claim."""
+sources or blend them into one unsourced claim.
+
+For anything the tools above don't cover (a question about an entity or relationship
+that isn't exposed by a dedicated tool), use get_schema_help and ontology_guided_query
+instead of declining or guessing. Call get_schema_help first -- with no arguments for
+the five-constituent map, or with a constituent name (e.g. "meridian") for its real
+labels and relationship types -- so you know what's actually there before writing a
+query. Never cite or query a label/relationship name you haven't confirmed this way.
+Then call ontology_guided_query with that constituent and a read-only MATCH...RETURN
+Cypher query to actually answer the question. This is for genuine gaps only -- prefer
+the dedicated tools above whenever one already covers what you need."""
 
 TOOLS = [
     {
@@ -300,6 +318,56 @@ TOOLS = [
             "required": ["customer_id", "product_type_code", "requested_amount", "recommendation", "reasoning"],
         },
     },
+    {
+        "name": "get_schema_help",
+        "description": (
+            "Looks up the REAL schema of the composite database's constituents -- not "
+            "the dedicated tools above, the actual graph structure underneath them. Call "
+            "with no arguments to get the five-constituent map (name, what it's backed by, "
+            "one-line description). Call with a constituent name to get that constituent's "
+            "real node labels and the real relationship types between them, each with a "
+            "description. Use this before ontology_guided_query, and before citing or "
+            "querying any label/relationship name you haven't already confirmed is real."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "constituent": {
+                    "type": "string",
+                    "description": (
+                        "Optional. One of 'meridian', 'documents', 'lendingpolicy', "
+                        "'context', 'shadowdb'. Omit for the five-constituent map instead."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "ontology_guided_query",
+        "description": (
+            "Runs a read-only Cypher query against one real data constituent, for analyst "
+            "questions the dedicated tools above don't cover. Call get_schema_help first to "
+            "confirm the labels/relationship types you're about to use are real -- this tool "
+            "won't stop you from writing a query that matches nothing. Write only the "
+            "MATCH/OPTIONAL MATCH/WHERE/WITH/RETURN body -- no USE clause (added for you) and "
+            "no CREATE/MERGE/SET/DELETE/REMOVE/DROP/CALL (rejected outright, this is read-only). "
+            "Results are capped at 25 rows."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "constituent": {
+                    "type": "string",
+                    "description": "One of 'meridian', 'documents', 'lendingpolicy', 'context', 'shadowdb'.",
+                },
+                "cypher": {
+                    "type": "string",
+                    "description": "A read-only MATCH...RETURN Cypher query body, without a USE clause.",
+                },
+            },
+            "required": ["constituent", "cypher"],
+        },
+    },
 ]
 
 
@@ -388,6 +456,8 @@ TOOL_STEP_LABELS = {
     "get_business_plan_details": "Reading business plan for loan request details",
     "get_decision_history": "Checking decision history for precedent",
     "record_decision": "Recording decision to context graph",
+    "get_schema_help": "Looking up real schema",
+    "ontology_guided_query": "Running ontology-guided query",
 }
 
 
@@ -397,7 +467,7 @@ def describe_tool_call(name, tool_input):
     the traceability layer: every step the agent took, in plain language."""
     label = TOOL_STEP_LABELS.get(name, f"Running {name}")
     tool_input = tool_input or {}
-    details = [tool_input[k] for k in ("product_type_code", "customer_id") if tool_input.get(k)]
+    details = [tool_input[k] for k in ("product_type_code", "customer_id", "constituent") if tool_input.get(k)]
     if tool_input.get("failed_rule_ids"):
         details.append(", ".join(tool_input["failed_rule_ids"]))
     return f"{label} ({', '.join(details)})" if details else label
@@ -440,6 +510,7 @@ def run_get_customer_transaction_summary(session, customer_id):
 
     inflow = sum(t["amount"] for t in customer_transactions if t["amount"] and t["amount"] > 0)
     outflow = sum(-t["amount"] for t in customer_transactions if t["amount"] and t["amount"] < 0)
+    net_cash_flow = round(inflow - outflow, 2)
 
     by_type = {}
     for t in customer_transactions:
@@ -447,12 +518,27 @@ def run_get_customer_transaction_summary(session, customer_id):
 
     dates = [t["transactionDate"] for t in customer_transactions if t.get("transactionDate")]
 
+    # POL-003 caps the loan amount against ANNUAL cash flow, but the
+    # transaction history on file almost never spans exactly one year --
+    # that division is exactly the kind of arithmetic step a model skips
+    # or fudges inconsistently across runs (observed live: sometimes
+    # treating the raw ~2-year total as if it were already annual, which
+    # flips a real policy failure into a false pass about half the time).
+    # Compute it once, deterministically, here, so there's nothing left
+    # for the model to get wrong.
+    span_days = (max(dates) - min(dates)).days if len(dates) > 1 else None
+    annualized_net_cash_flow = (
+        round(net_cash_flow / (span_days / 365.25), 2) if span_days else net_cash_flow
+    )
+
     summary = {
         "customerId": customer_id,
         "transactionCount": len(customer_transactions),
         "totalInflow": round(inflow, 2),
         "totalOutflow": round(outflow, 2),
-        "netCashFlow": round(inflow - outflow, 2),
+        "netCashFlow": net_cash_flow,
+        "transactionHistorySpanDays": span_days,
+        "annualizedNetCashFlow": annualized_net_cash_flow,
         "transactionTypeBreakdown": by_type,
         "earliestDate": str(min(dates)) if dates else None,
         "latestDate": str(max(dates)) if dates else None,
@@ -614,6 +700,23 @@ def _build_precedent_table(precedents):
     return f"{header}\n{rows}"
 
 
+def run_get_schema_help(session, constituent=None):
+    return ontology.fetch_schema_help(session, constituent)
+
+
+def run_ontology_guided_query(session, constituent, cypher):
+    """Wraps matching.query_constituent so a rejected/invalid query comes
+    back as a normal tool result (an "error" field the model can read and
+    correct) instead of propagating up and killing the whole turn -- the
+    model writing unsafe or malformed Cypher is an expected, recoverable
+    case here, not a server error."""
+    try:
+        rows = matching.query_constituent(session, constituent, cypher)
+        return {"constituent": constituent, "rows": rows}
+    except Exception as e:
+        return {"constituent": constituent, "error": str(e)}
+
+
 def run_tool(name, tool_input, session):
     if name == "find_customer":
         return run_find_customer(session)
@@ -642,6 +745,10 @@ def run_tool(name, tool_input, session):
             tool_input.get("applied_rule_ids"), tool_input.get("escalation_role"),
             tool_input.get("failed_rule_ids"),
         )
+    if name == "get_schema_help":
+        return run_get_schema_help(session, tool_input.get("constituent"))
+    if name == "ontology_guided_query":
+        return run_ontology_guided_query(session, tool_input["constituent"], tool_input["cypher"])
     return {"error": f"Unknown tool: {name}"}
 
 
