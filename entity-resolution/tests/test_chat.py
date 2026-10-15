@@ -1,3 +1,5 @@
+import datetime
+
 from resolver import chat, graph_data, matching, shadow_nodes
 
 
@@ -184,9 +186,9 @@ def test_run_get_customer_transaction_summary_computes_cash_flow(monkeypatch, fa
     monkeypatch.setattr(
         matching, "fetch_meridian_customer_transactions",
         lambda s: [
-            {"customerId": "C001", "transactionId": "T1", "transactionType": "Deposit", "amount": 500.0, "transactionDate": "2024-01-01"},
-            {"customerId": "C001", "transactionId": "T2", "transactionType": "Withdrawal", "amount": -200.0, "transactionDate": "2024-02-01"},
-            {"customerId": "C002", "transactionId": "T3", "transactionType": "Deposit", "amount": 1000.0, "transactionDate": "2024-01-01"},
+            {"customerId": "C001", "transactionId": "T1", "transactionType": "Deposit", "amount": 500.0, "transactionDate": datetime.date(2024, 1, 1)},
+            {"customerId": "C001", "transactionId": "T2", "transactionType": "Withdrawal", "amount": -200.0, "transactionDate": datetime.date(2024, 2, 1)},
+            {"customerId": "C002", "transactionId": "T3", "transactionType": "Deposit", "amount": 1000.0, "transactionDate": datetime.date(2024, 1, 1)},
         ],
     )
 
@@ -199,6 +201,10 @@ def test_run_get_customer_transaction_summary_computes_cash_flow(monkeypatch, fa
     assert result["transactionTypeBreakdown"] == {"Deposit": 1, "Withdrawal": 1}
     assert result["earliestDate"] == "2024-01-01"
     assert result["latestDate"] == "2024-02-01"
+    # 31 days of history annualized out to a full year, deterministically
+    # -- not left for the model to compute (or skip) itself.
+    assert result["transactionHistorySpanDays"] == 31
+    assert result["annualizedNetCashFlow"] == round(300.0 / (31 / 365.25), 2)
     summary_node = next(n for n in result["graph"]["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C001")
     assert summary_node["color"] == graph_data._GROUP_COLORS["meridian"]
     assert result["graph"]["edges"][0]["from"] == "meridian:C001"
@@ -208,7 +214,7 @@ def test_run_get_customer_transaction_summary_flags_negative_cash_flow(monkeypat
     monkeypatch.setattr(
         matching, "fetch_meridian_customer_transactions",
         lambda s: [
-            {"customerId": "C002", "transactionId": "T1", "transactionType": "Withdrawal", "amount": -500.0, "transactionDate": "2024-01-01"},
+            {"customerId": "C002", "transactionId": "T1", "transactionType": "Withdrawal", "amount": -500.0, "transactionDate": datetime.date(2024, 1, 1)},
         ],
     )
 
@@ -216,6 +222,35 @@ def test_run_get_customer_transaction_summary_flags_negative_cash_flow(monkeypat
 
     summary_node = next(n for n in result["graph"]["nodes"] if n["id"] == "meridian:TXN-SUMMARY-C002")
     assert summary_node["color"] == graph_data._RISK_COLOR
+    # Only one date on file -- nothing to annualize against, so it falls
+    # back to the raw net figure rather than dividing by zero.
+    assert result["transactionHistorySpanDays"] is None
+    assert result["annualizedNetCashFlow"] == result["netCashFlow"]
+
+
+def test_run_get_customer_transaction_summary_annualizes_a_multi_year_history(monkeypatch, fake_session):
+    # Rosa's Bakery's real numbers (~2 years of history, $127,506.52 net):
+    # treating the raw total as if it were already annual understates the
+    # true loan-to-cash-flow ratio enough to flip POL-003 from a fail to a
+    # false pass -- this is the exact bug being fixed.
+    monkeypatch.setattr(
+        matching, "fetch_meridian_customer_transactions",
+        lambda s: [
+            {"customerId": "C001", "transactionId": "T1", "transactionType": "Deposit", "amount": 127506.52, "transactionDate": datetime.date(2024, 7, 31)},
+            {"customerId": "C001", "transactionId": "T2", "transactionType": "Deposit", "amount": 0.0, "transactionDate": datetime.date(2026, 7, 28)},
+        ],
+    )
+
+    result = chat.run_get_customer_transaction_summary(fake_session, "C001")
+
+    assert result["transactionHistorySpanDays"] == 727
+    assert result["annualizedNetCashFlow"] == round(127506.52 / (727 / 365.25), 2)
+    # The raw total alone reads as a 3.1x request -- comfortably under the
+    # 3.5x cap. Annualized, it's a ~6.25x breach. Same underlying data,
+    # opposite policy verdict -- which is why the model must never use
+    # netCashFlow directly for an annual-cash-flow rule.
+    assert 400000 / result["netCashFlow"] < 3.5
+    assert 400000 / result["annualizedNetCashFlow"] > 3.5
 
 
 def test_run_get_relationship_manager_joins_branch_info(monkeypatch, fake_session):

@@ -35,6 +35,14 @@ affiliates, related entities, or common ownership, you must call
 find_parent_companies for this customer to check them -- do not assume the
 applicant's own facilities are the only ones that rule applies to.
 
+For any rule that caps the loan amount against ANNUAL cash flow (e.g. POL-003), use
+get_customer_transaction_summary's own "annualizedNetCashFlow" field, not "netCashFlow"
+(which is the raw total over whatever span of transaction history happens to be on
+file, almost never exactly one year) and not your own arithmetic on the date range --
+the tool already does that division for you, deterministically. Comparing the
+requested amount against the raw, un-annualized total understates the true ratio and
+can turn a real policy failure into a false pass.
+
 Your final written answer for a loan recommendation must ALWAYS include, in that
 same answer, a markdown table with one row per policy rule you checked: the rule
 ID, its threshold, the applicant's actual figure, and whether it passed or failed.
@@ -502,6 +510,7 @@ def run_get_customer_transaction_summary(session, customer_id):
 
     inflow = sum(t["amount"] for t in customer_transactions if t["amount"] and t["amount"] > 0)
     outflow = sum(-t["amount"] for t in customer_transactions if t["amount"] and t["amount"] < 0)
+    net_cash_flow = round(inflow - outflow, 2)
 
     by_type = {}
     for t in customer_transactions:
@@ -509,12 +518,27 @@ def run_get_customer_transaction_summary(session, customer_id):
 
     dates = [t["transactionDate"] for t in customer_transactions if t.get("transactionDate")]
 
+    # POL-003 caps the loan amount against ANNUAL cash flow, but the
+    # transaction history on file almost never spans exactly one year --
+    # that division is exactly the kind of arithmetic step a model skips
+    # or fudges inconsistently across runs (observed live: sometimes
+    # treating the raw ~2-year total as if it were already annual, which
+    # flips a real policy failure into a false pass about half the time).
+    # Compute it once, deterministically, here, so there's nothing left
+    # for the model to get wrong.
+    span_days = (max(dates) - min(dates)).days if len(dates) > 1 else None
+    annualized_net_cash_flow = (
+        round(net_cash_flow / (span_days / 365.25), 2) if span_days else net_cash_flow
+    )
+
     summary = {
         "customerId": customer_id,
         "transactionCount": len(customer_transactions),
         "totalInflow": round(inflow, 2),
         "totalOutflow": round(outflow, 2),
-        "netCashFlow": round(inflow - outflow, 2),
+        "netCashFlow": net_cash_flow,
+        "transactionHistorySpanDays": span_days,
+        "annualizedNetCashFlow": annualized_net_cash_flow,
         "transactionTypeBreakdown": by_type,
         "earliestDate": str(min(dates)) if dates else None,
         "latestDate": str(max(dates)) if dates else None,
