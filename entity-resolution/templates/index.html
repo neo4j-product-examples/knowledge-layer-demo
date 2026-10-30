@@ -534,12 +534,19 @@
     // paint, with every later constituent's column extending to its
     // right as the conversation reveals them, rather than needing fit()
     // to immediately re-center a cluster that was seeded off to one side.
-    // Used both to seed a new node's starting x and as a gentle restoring
-    // force throughout the physics simulation (see HOME_COLUMN_STRENGTH
-    // below), while still letting directly-connected nodes (e.g. a
-    // documents/meridian match) pull close to each other across the
-    // column boundary.
-    const GROUP_HOME_X = { documents: 0, meridian: 550, policy: 1100, context: 1650 };
+    //
+    // This is only a tie-breaker, not the real positioning logic (see
+    // HOME_COLUMN_STRENGTH below, deliberately weak) -- two nodes that
+    // are actually connected (e.g. documents' "Organization: Rosa's
+    // Bakery" and meridian's "Customer: C001", bridged by a name_fuzzy
+    // match) should sit close together because the edge spring pulls
+    // them there, the same as any other real relationship, not because
+    // either one was dragged to a fixed point on the canvas. The home
+    // column only matters for nodes with nothing else pulling on them,
+    // keeping the overall reading order left-to-right without forcing
+    // every column to the same rigid width regardless of how connected
+    // its contents actually are.
+    const GROUP_HOME_X = { documents: 0, meridian: 350, policy: 700, context: 1050 };
 
     // NVL's own fit() doesn't reliably recompute the camera once the
     // graph has grown wide (confirmed live: getNodePositions() correctly
@@ -593,12 +600,15 @@
       const SPRING_LENGTH = 150;
       const SPRING_STRENGTH = 0.02;
       const DAMPING = 0.85;
-      // Comparable in magnitude to SPRING_STRENGTH, not a token nudge --
-      // weaker and a strongly cross-column edge (e.g. a documents<->
-      // meridian match) just drags the whole column formation apart
-      // instead of nodes settling into clear bands with normal give at
-      // the boundary where related nodes from neighboring columns meet.
-      const HOME_COLUMN_STRENGTH = 0.012;
+      // Deliberately much weaker than SPRING_STRENGTH (edges) -- this is
+      // only a tie-breaker for nodes with no other pull on their position,
+      // not a competitor to real relationships. A directly-connected pair
+      // across constituents (e.g. a documents<->meridian name_fuzzy match)
+      // should settle close together because the spring pulls them there,
+      // same as any other edge; stronger than this and the home column
+      // would stretch that connection out to a fixed distance regardless
+      // of how tightly the two sides actually relate.
+      const HOME_COLUMN_STRENGTH = 0.0025;
 
       for (let iter = 0; iter < 300; iter++) {
         for (let i = 0; i < nodes.length; i++) {
