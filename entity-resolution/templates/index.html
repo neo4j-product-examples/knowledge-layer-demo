@@ -524,23 +524,35 @@
     // stays whatever color it was first painted forever.
     const nodeColorsById = new Map();
 
+    // A node's constituent decides its "home column" -- left to right,
+    // documents (the business plan) -> meridian (the bank's own data) ->
+    // lendingpolicy -> context (decisions/precedent). Used both to seed a
+    // new node's starting x (so it's born in roughly the right place) and
+    // as a gentle restoring force throughout the physics simulation (see
+    // HOME_COLUMN_STRENGTH below) so the whole canvas organizes into
+    // those bands instead of one undifferentiated blob, while still
+    // letting directly-connected nodes (e.g. a documents/meridian match)
+    // pull close to each other across the column boundary.
+    const GROUP_HOME_X = { documents: -825, meridian: -275, policy: 275, context: 825 };
+
     function layoutNodes(nodes, edges) {
       const newNodeIds = new Set();
       for (const node of nodes) {
         if (nodePositions.has(node.id)) continue;
         newNodeIds.add(node.id);
+        const homeX = GROUP_HOME_X[node.group] ?? 0;
         const neighborPositions = edges
           .filter(e => e.from === node.id || e.to === node.id)
           .map(e => nodePositions.get(e.from === node.id ? e.to : e.from))
           .filter(Boolean);
         if (neighborPositions.length) {
-          const avg = neighborPositions.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+          const avgY = neighborPositions.reduce((acc, p) => acc + p.y, 0) / neighborPositions.length;
           nodePositions.set(node.id, {
-            x: avg.x / neighborPositions.length + (Math.random() * 60 - 30),
-            y: avg.y / neighborPositions.length + (Math.random() * 60 - 30),
+            x: homeX + (Math.random() * 60 - 30),
+            y: avgY + (Math.random() * 60 - 30),
           });
         } else {
-          nodePositions.set(node.id, { x: Math.random() * 100 - 50, y: Math.random() * 100 - 50 });
+          nodePositions.set(node.id, { x: homeX + (Math.random() * 100 - 50), y: Math.random() * 100 - 50 });
         }
       }
       if (!newNodeIds.size) return nodePositions;
@@ -551,6 +563,12 @@
       const SPRING_LENGTH = 150;
       const SPRING_STRENGTH = 0.02;
       const DAMPING = 0.85;
+      // Comparable in magnitude to SPRING_STRENGTH, not a token nudge --
+      // weaker and a strongly cross-column edge (e.g. a documents<->
+      // meridian match) just drags the whole column formation apart
+      // instead of nodes settling into clear bands with normal give at
+      // the boundary where related nodes from neighboring columns meet.
+      const HOME_COLUMN_STRENGTH = 0.012;
 
       for (let iter = 0; iter < 300; iter++) {
         for (let i = 0; i < nodes.length; i++) {
@@ -577,6 +595,13 @@
           const va = velocities.get(e.from), vb = velocities.get(e.to);
           va.vx += fx; va.vy += fy;
           vb.vx -= fx; vb.vy -= fy;
+        }
+        for (const node of nodes) {
+          if (!newNodeIds.has(node.id)) continue;
+          const pos = nodePositions.get(node.id);
+          const vel = velocities.get(node.id);
+          const homeX = GROUP_HOME_X[node.group];
+          if (homeX !== undefined) vel.vx += (homeX - pos.x) * HOME_COLUMN_STRENGTH;
         }
         for (const node of nodes) {
           if (!newNodeIds.has(node.id)) continue; // existing nodes stay put
