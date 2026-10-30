@@ -526,14 +526,44 @@
 
     // A node's constituent decides its "home column" -- left to right,
     // documents (the business plan) -> meridian (the bank's own data) ->
-    // lendingpolicy -> context (decisions/precedent). Used both to seed a
-    // new node's starting x (so it's born in roughly the right place) and
-    // as a gentle restoring force throughout the physics simulation (see
-    // HOME_COLUMN_STRENGTH below) so the whole canvas organizes into
-    // those bands instead of one undifferentiated blob, while still
-    // letting directly-connected nodes (e.g. a documents/meridian match)
-    // pull close to each other across the column boundary.
-    const GROUP_HOME_X = { documents: -825, meridian: -275, policy: 275, context: 825 };
+    // lendingpolicy -> context (decisions/precedent). documents sits at
+    // x=0 deliberately: that's where NVL's camera starts (initialZoom: 1,
+    // no pan) before the first fit() call ever runs, and it's also the
+    // very first thing on screen (uploading the business plan, before any
+    // chat tool has run) -- so it's framed correctly from the first
+    // paint, with every later constituent's column extending to its
+    // right as the conversation reveals them, rather than needing fit()
+    // to immediately re-center a cluster that was seeded off to one side.
+    // Used both to seed a new node's starting x and as a gentle restoring
+    // force throughout the physics simulation (see HOME_COLUMN_STRENGTH
+    // below), while still letting directly-connected nodes (e.g. a
+    // documents/meridian match) pull close to each other across the
+    // column boundary.
+    const GROUP_HOME_X = { documents: 0, meridian: 550, policy: 1100, context: 1650 };
+
+    // NVL's own fit() doesn't reliably recompute the camera once the
+    // graph has grown wide (confirmed live: getNodePositions() correctly
+    // reports the full bounding box, but fit() leaves scale/pan
+    // unchanged) -- so the camera is framed here instead, directly from
+    // the positions this file already tracks, via setZoomAndPan (which
+    // does work correctly). Centers on the bounding box of every node on
+    // screen and zooms to fit it with some breathing room, capped so a
+    // single small cluster (e.g. just the business plan, right after
+    // upload) doesn't get zoomed in absurdly close.
+    function fitToContent() {
+      if (!nvl || !nodePositions.size) return;
+      const positions = Array.from(nodePositions.values());
+      const minX = Math.min(...positions.map(p => p.x));
+      const maxX = Math.max(...positions.map(p => p.x));
+      const minY = Math.min(...positions.map(p => p.y));
+      const maxY = Math.max(...positions.map(p => p.y));
+      const PADDING = 120; // node radius + label breathing room
+      const contentWidth = Math.max(maxX - minX, 1) + PADDING * 2;
+      const contentHeight = Math.max(maxY - minY, 1) + PADDING * 2;
+      const rect = graphContainer.getBoundingClientRect();
+      const scale = Math.min(rect.width / contentWidth, rect.height / contentHeight, 1.5);
+      nvl.setZoomAndPan(scale, (minX + maxX) / 2, -(minY + maxY) / 2);
+    }
 
     function layoutNodes(nodes, edges) {
       const newNodeIds = new Set();
@@ -682,7 +712,7 @@
         // that redraw immediately.
         nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
         for (const n of nodeList) nodeColorsById.set(n.id, n.color);
-        requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+        requestAnimationFrame(() => requestAnimationFrame(() => fitToContent()));
         return;
       }
 
@@ -732,7 +762,7 @@
         if (frame < FRAMES) await new Promise(resolve => setTimeout(resolve, 35));
       }
       if (myGeneration !== renderGeneration) return;
-      requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+      requestAnimationFrame(() => requestAnimationFrame(() => fitToContent()));
     }
 
     function addMessage(role, text) {
