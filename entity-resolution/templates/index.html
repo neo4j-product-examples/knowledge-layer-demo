@@ -589,6 +589,7 @@
     const FAN_RADIUS = 170;
 
     function layoutNodes(nodes, edges) {
+      const groupById = new Map(nodes.map(n => [n.id, n.group]));
       const newNodeIds = new Set();
       for (const node of nodes) {
         if (nodePositions.has(node.id)) continue;
@@ -598,11 +599,19 @@
           .filter(e => e.from === node.id || e.to === node.id)
           .map(e => e.from === node.id ? e.to : e.from)
           .filter(id => nodePositions.has(id));
-        if (neighbors.length === 1) {
-          // Exactly one already-placed neighbor -- a clear hub-and-spoke
-          // relationship (e.g. a customer's credit score, a policy
-          // section's rule). Fan out around it instead of a random jitter.
-          const hubId = neighbors[0];
+        // Fanning is only for a hub and its own constituent's children
+        // (e.g. a customer and its credit score) -- a cross-constituent
+        // bridge (e.g. a brand-new meridian customer whose only neighbor
+        // so far is the documents org it was matched to) must still go to
+        // its own home column, or the very first node of a constituent
+        // orbits the wrong one and drags its whole column out of order.
+        const sameGroupNeighbors = neighbors.filter(id => groupById.get(id) === node.group);
+        if (sameGroupNeighbors.length === 1) {
+          // Exactly one already-placed neighbor in the same constituent --
+          // a clear hub-and-spoke relationship (e.g. a customer's credit
+          // score, a policy section's rule). Fan out around it instead of
+          // a random jitter.
+          const hubId = sameGroupNeighbors[0];
           const hubPos = nodePositions.get(hubId);
           const index = hubChildCount.get(hubId) || 0;
           hubChildCount.set(hubId, index + 1);
@@ -611,7 +620,12 @@
             x: hubPos.x + FAN_RADIUS * Math.cos(angle),
             y: hubPos.y + FAN_RADIUS * Math.sin(angle),
           });
-        } else if (neighbors.length > 1) {
+        } else if (neighbors.length >= 1) {
+          // Either a cross-constituent bridge (its one neighbor is in a
+          // different group -- e.g. a brand-new meridian customer matched
+          // to a documents org) or an ambiguous multi-parent node: either
+          // way, home column decides x, and the neighbor(s) only nudge y
+          // so it doesn't land disconnected-looking far from them.
           const neighborPositions = neighbors.map(id => nodePositions.get(id));
           const avgY = neighborPositions.reduce((acc, p) => acc + p.y, 0) / neighborPositions.length;
           nodePositions.set(node.id, {
