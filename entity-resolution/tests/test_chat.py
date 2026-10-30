@@ -116,7 +116,7 @@ def test_describe_tool_call_includes_customer_id_when_present():
 def test_describe_tool_call_handles_no_customer_id():
     label = chat.describe_tool_call("find_customer", {})
 
-    assert label == "Finding matching Meridian customer"
+    assert label == "Finding matching Nordtell customer"
 
 
 def test_describe_tool_call_falls_back_for_unknown_tool():

@@ -42,7 +42,7 @@ DATA_PRODUCTS = [
         "shortCode": "BANK",
         "backend": "Aura Virtual Graph over Databricks -- read-only, nothing copied",
         "description": (
-            "Meridian Bank's own system of record: customers, accounts, credit scores, "
+            "Nordtell Bank's own system of record: customers, accounts, credit scores, "
             "loan facilities, transactions, and relationship managers. Exposed as a live, "
             "read-only virtual graph -- the agent queries it directly over Databricks; "
             "none of it is ever copied into Neo4j."
@@ -57,7 +57,7 @@ DATA_PRODUCTS = [
         "description": (
             "The applicant's own account of their business and loan ask -- people, the "
             "organization, and the loan request itself -- extracted from an uploaded PDF "
-            "into a knowledge graph. This is the applicant's narrative, not Meridian's "
+            "into a knowledge graph. This is the applicant's narrative, not Nordtell's "
             "system of record."
         ),
         "color": "#D98847",
@@ -68,7 +68,7 @@ DATA_PRODUCTS = [
         "shortCode": "PLCY",
         "backend": "AuraDB, modeled as a real policy-manual graph",
         "description": (
-            "Meridian's underwriting manual as a graph: sections, citable rules (minimum "
+            "Nordtell's underwriting manual as a graph: sections, citable rules (minimum "
             "credit score, DSCR, loan-to-value, delinquency checks), and the escalation "
             "path a rule triggers when it fails. A recommendation is checked against these "
             "rules by section number, not reasoned about in the abstract."
@@ -81,7 +81,7 @@ DATA_PRODUCTS = [
         "shortCode": "HIST",
         "backend": "AuraDB, written to at decision time",
         "description": (
-            "Meridian's own record of past loan recommendations -- what was decided, why, "
+            "Nordtell's own record of past loan recommendations -- what was decided, why, "
             "and which policy rules drove it. Grounds new recommendations in precedent "
             "instead of reasoning about each application in isolation, and every decision "
             "made here becomes precedent for the next one."
@@ -111,9 +111,9 @@ DATA_PRODUCTS = [
 SCHEMA_ENTITIES = [
     # -- meridian --
     {"entityId": "meridian:Customer", "productId": "meridian", "name": "Customer",
-     "description": "A Meridian banking customer -- the entity every other meridian record hangs off of."},
+     "description": "A Nordtell banking customer -- the entity every other Nordtell record hangs off of."},
     {"entityId": "meridian:Account", "productId": "meridian", "name": "Account",
-     "description": "A deposit account a customer holds with Meridian."},
+     "description": "A deposit account a customer holds with Nordtell."},
     {"entityId": "meridian:LoanFacility", "productId": "meridian", "name": "Loan Facility",
      "description": "An existing loan facility, with a payment status (Current/Delinquent) that lending-policy rules check."},
     {"entityId": "meridian:KYCStatus", "productId": "meridian", "name": "KYC Status",
@@ -121,11 +121,11 @@ SCHEMA_ENTITIES = [
     {"entityId": "meridian:CreditScore", "productId": "meridian", "name": "Credit Score",
      "description": "A dated credit-score reading, kept as history so a trend can be read, not just a single number."},
     {"entityId": "meridian:LoanApplication", "productId": "meridian", "name": "Loan Application",
-     "description": "A formal application on file with Meridian -- the bank's own record of a loan ask, as opposed to the business plan's account of it."},
+     "description": "A formal application on file with Nordtell -- the bank's own record of a loan ask, as opposed to the business plan's account of it."},
     {"entityId": "meridian:Transaction", "productId": "meridian", "name": "Transaction",
      "description": "One posted transaction on an account; rolled up into cash-flow summaries rather than shown individually."},
     {"entityId": "meridian:Employee", "productId": "meridian", "name": "Employee",
-     "description": "A Meridian employee -- covers relationship managers assigned to a customer."},
+     "description": "A Nordtell employee -- covers relationship managers assigned to a customer."},
     {"entityId": "meridian:Branch", "productId": "meridian", "name": "Branch",
      "description": "The physical branch an employee works out of."},
     # -- documents --
@@ -134,7 +134,7 @@ SCHEMA_ENTITIES = [
     {"entityId": "documents:Organization", "productId": "documents", "name": "Organization",
      "description": "The applicant business itself, as described in its own business plan."},
     {"entityId": "documents:Account", "productId": "documents", "name": "Account",
-     "description": "An account the business plan mentions -- matched against Meridian's own Account records."},
+     "description": "An account the business plan mentions -- matched against Nordtell's own Account records."},
     {"entityId": "documents:Property", "productId": "documents", "name": "Property",
      "description": "A property named in the business plan, e.g. one a principal co-owns."},
     {"entityId": "documents:LoanRequest", "productId": "documents", "name": "Loan Request",
@@ -231,26 +231,26 @@ RELATIONSHIPS = [
     {
         "fromId": "shadowdb", "toId": "meridian", "type": "RESOLVES",
         "description": (
-            "Matches business-plan people/organizations against Meridian customers and "
-            "accounts, then shadows the Meridian side so both can be viewed as one "
+            "Matches business-plan people/organizations against Nordtell customers and "
+            "accounts, then shadows the Nordtell side so both can be viewed as one "
             "connected graph."
         ),
     },
     {
         "fromId": "shadowdb", "toId": "documents", "type": "RESOLVES",
-        "description": "Shadows the business-plan entities so they can be linked to their matched Meridian counterparts.",
+        "description": "Shadows the business-plan entities so they can be linked to their matched Nordtell counterparts.",
     },
     {
         "fromId": "documents", "toId": "meridian", "type": "SUPPLEMENTS",
         "description": (
             "The applicant's stated loan request and business narrative supplement -- and "
-            "are checked against -- Meridian's own application, credit, and transaction "
+            "are checked against -- Nordtell's own application, credit, and transaction "
             "records."
         ),
     },
     {
         "fromId": "lendingpolicy", "toId": "meridian", "type": "GOVERNS",
-        "description": "A loan recommendation for a Meridian customer is checked against these underwriting rules, cited by section number.",
+        "description": "A loan recommendation for a Nordtell customer is checked against these underwriting rules, cited by section number.",
     },
     {
         "fromId": "context", "toId": "lendingpolicy", "type": "CITES",
@@ -259,7 +259,7 @@ RELATIONSHIPS = [
     {
         "fromId": "context", "toId": "meridian", "type": "CITES",
         "description": (
-            "Every recorded decision is about a specific Meridian customer, and becomes "
+            "Every recorded decision is about a specific Nordtell customer, and becomes "
             "precedent the next time that customer -- or a similar loan -- comes up."
         ),
     },

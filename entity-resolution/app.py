@@ -53,7 +53,7 @@ def get_anthropic_client():
 
 
 def ensure_meridian_seeded():
-    """Idempotent: seeds shadowDb with Meridian shadow nodes if missing
+    """Idempotent: seeds shadowDb with Nordtell shadow nodes if missing
     (requirements §5.1, §7.1)."""
     with db.get_session(get_driver()) as session:
         if not shadow_nodes.meridian_shadow_nodes_exist(session):
@@ -79,7 +79,7 @@ def index():
             shadow_nodes.clear_document_shadow_data(session)
             matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
-        logger.exception("Failed to seed Meridian shadow nodes")
+        logger.exception("Failed to seed Nordtell shadow nodes")
         return render_template("index.html", error=(
             "Could not reach the composite database to seed shadow nodes. "
             "Check that the meridianComposite DBMS is running."

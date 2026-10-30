@@ -2,7 +2,7 @@
 standalone AuraDB, aliased into the composite database -- see HANDOFF.md
 for how that alias was created).
 
-Populates it with a handful of historical loan decisions for other Meridian
+Populates it with a handful of historical loan decisions for other Nordtell
 customers, so `get_decision_history` has real precedent to find on day one
 instead of an empty graph. Rosa's Bakery's own decision is written at
 runtime by the `record_decision` chat tool, not by this script.

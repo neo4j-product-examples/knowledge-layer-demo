@@ -21,7 +21,7 @@ load_dotenv(".env")
 from resolver import db
 
 POLICY_DOCUMENT = {
-    "title": "Meridian Bank Commercial Lending Policy Manual",
+    "title": "Nordtell Bank Commercial Lending Policy Manual",
     "version": "3.2",
     "effectiveDate": "2026-01-01",
     "owner": "Credit Risk & Underwriting",
