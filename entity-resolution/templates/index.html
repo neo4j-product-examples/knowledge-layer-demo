@@ -515,6 +515,13 @@
     // adding a node reads as "a node was added" rather than the whole graph
     // reshuffling.
     const nodePositions = new Map();
+    // How many children have already been fanned out around each hub node
+    // (see the golden-angle seeding in layoutNodes below) -- persists
+    // across calls, same as nodePositions, so a hub's second batch of
+    // children (e.g. a customer's credit score arriving in a later tool
+    // call than its KYC status) continues the spiral instead of
+    // restarting it and overlapping the first batch.
+    const hubChildCount = new Map();
     // The color NVL was last told about for each node id. A node already on
     // screen (already in nodePositions) is normally left out of the payload
     // sent to NVL entirely -- but if its color in graphNodesById has since
@@ -572,17 +579,40 @@
       nvl.setZoomAndPan(scale, (minX + maxX) / 2, -(minY + maxY) / 2);
     }
 
+    // Evenly spreads points added one at a time around a center without
+    // ever needing to know the eventual total (the same angle a
+    // sunflower uses between successive seeds) -- so a hub's children
+    // read as spokes fanning out from it, arriving over however many
+    // separate tool calls, rather than a scattered cluster that only
+    // looks organized when everything happens to land in one batch.
+    const GOLDEN_ANGLE = 2.399963229728653;
+    const FAN_RADIUS = 170;
+
     function layoutNodes(nodes, edges) {
       const newNodeIds = new Set();
       for (const node of nodes) {
         if (nodePositions.has(node.id)) continue;
         newNodeIds.add(node.id);
         const homeX = GROUP_HOME_X[node.group] ?? 0;
-        const neighborPositions = edges
+        const neighbors = edges
           .filter(e => e.from === node.id || e.to === node.id)
-          .map(e => nodePositions.get(e.from === node.id ? e.to : e.from))
-          .filter(Boolean);
-        if (neighborPositions.length) {
+          .map(e => e.from === node.id ? e.to : e.from)
+          .filter(id => nodePositions.has(id));
+        if (neighbors.length === 1) {
+          // Exactly one already-placed neighbor -- a clear hub-and-spoke
+          // relationship (e.g. a customer's credit score, a policy
+          // section's rule). Fan out around it instead of a random jitter.
+          const hubId = neighbors[0];
+          const hubPos = nodePositions.get(hubId);
+          const index = hubChildCount.get(hubId) || 0;
+          hubChildCount.set(hubId, index + 1);
+          const angle = index * GOLDEN_ANGLE;
+          nodePositions.set(node.id, {
+            x: hubPos.x + FAN_RADIUS * Math.cos(angle),
+            y: hubPos.y + FAN_RADIUS * Math.sin(angle),
+          });
+        } else if (neighbors.length > 1) {
+          const neighborPositions = neighbors.map(id => nodePositions.get(id));
           const avgY = neighborPositions.reduce((acc, p) => acc + p.y, 0) / neighborPositions.length;
           nodePositions.set(node.id, {
             x: homeX + (Math.random() * 60 - 30),
