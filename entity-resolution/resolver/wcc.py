@@ -7,21 +7,19 @@ union-find itself is a pure function so it's fully unit-testable without a
 database.
 """
 
-from resolver.shadow_nodes import ALL_REL_TYPES
-
-_REL_TYPE_PATTERN = "|".join(ALL_REL_TYPES)
+from resolver.shadow_nodes import MATCH_REL_TYPE
 
 _FETCH_GRAPH = f"""
 USE meridianComposite.shadowDb
 MATCH (n:Shadow)
-OPTIONAL MATCH (n)-[r:{_REL_TYPE_PATTERN}]-(m:Shadow)
+OPTIONAL MATCH (n)-[r:{MATCH_REL_TYPE}]-(m:Shadow)
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId,
        m.sourceGraph AS otherSourceGraph, m.sourceId AS otherSourceId
 """
 
 _GDS_PROJECT_AND_WRITE = f"""
 USE meridianComposite.shadowDb
-CALL gds.graph.project('shadowGraph', 'Shadow', {ALL_REL_TYPES!r})
+CALL gds.graph.project('shadowGraph', 'Shadow', {[MATCH_REL_TYPE]!r})
 YIELD graphName
 CALL gds.wcc.write('shadowGraph', {{writeProperty: 'componentId'}})
 YIELD componentCount
