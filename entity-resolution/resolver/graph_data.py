@@ -1,52 +1,38 @@
-"""Shapes the shadowDb graph into vis-network-friendly JSON for the UI."""
-from resolver.shadow_nodes import ALL_REL_TYPES, MATCH_REL_TYPE
-
-_REL_TYPE_PATTERN = "|".join(ALL_REL_TYPES)
+"""Shapes shadowDb's identity graph -- plus each node's real neighborhood,
+read live from its own source graph -- into vis-network-friendly JSON for
+the UI."""
+from resolver import matching
+from resolver.shadow_nodes import MATCH_REL_TYPE
 
 _FETCH_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow)
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
-       n.componentId AS componentId, n.customerName AS customerName, n.name AS name
+       n.name AS name
 """
 
 _FETCH_DOCUMENTS_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow {sourceGraph: 'documents'})
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
-       n.componentId AS componentId, n.customerName AS customerName, n.name AS name
+       n.name AS name
 """
 
 # Directed MATCH (not `-[r]-`) so `from`/`to` reflect the relationship's real
 # stored direction instead of being reconstructed by guesswork.
-_FETCH_EDGES = f"""
+_FETCH_SIMILAR_TO_EDGES = f"""
 USE meridianComposite.shadowDb
-MATCH (a:Shadow)-[r:{_REL_TYPE_PATTERN}]->(b:Shadow)
+MATCH (a:Shadow)-[r:{MATCH_REL_TYPE}]->(b:Shadow)
 RETURN a.sourceGraph AS fromSourceGraph, a.sourceId AS fromSourceId,
        b.sourceGraph AS toSourceGraph, b.sourceId AS toSourceId,
        type(r) AS relType, r.confidence AS confidence, r.matchType AS matchType
-"""
-
-_FETCH_DOCUMENTS_EDGES = f"""
-USE meridianComposite.shadowDb
-MATCH (a:Shadow {{sourceGraph: 'documents'}})-[r:{_REL_TYPE_PATTERN}]->(b:Shadow {{sourceGraph: 'documents'}})
-RETURN a.sourceGraph AS fromSourceGraph, a.sourceId AS fromSourceId,
-       b.sourceGraph AS toSourceGraph, b.sourceId AS toSourceId,
-       type(r) AS relType, r.confidence AS confidence, r.matchType AS matchType
-"""
-
-_FETCH_HIERARCHY_NEIGHBORHOOD = """
-USE meridianComposite.shadowDb
-MATCH (start:Shadow:Customer {{sourceGraph: 'meridian', sourceId: $customerId}})
-MATCH (start)-[:HAS_PARENT*1..{max_hops}]-(other:Shadow:Customer)
-RETURN DISTINCT other.sourceId AS sourceId, other.customerName AS customerName
 """
 
 _FETCH_HIERARCHY_EDGES = """
-USE meridianComposite.shadowDb
-MATCH (a:Shadow:Customer)-[:HAS_PARENT]->(b:Shadow:Customer)
-WHERE a.sourceId IN $ids AND b.sourceId IN $ids
-RETURN a.sourceId AS fromId, b.sourceId AS toId
+USE meridianComposite.meridian
+MATCH (a:Customer)-[:HAS_PARENT]->(b:Customer)
+WHERE a.customerId IN $ids AND b.customerId IN $ids
+RETURN a.customerId AS fromId, b.customerId AS toId
 """
 
 _GROUP_COLORS = {"meridian": "#2B5876", "documents": "#D98847", "policy": "#4FA9B8", "context": "#7A5C99"}
@@ -85,13 +71,12 @@ def _customer_stub_node(customer_id):
         "label": f"Customer: {customer_id}",
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }
 
 
 def _display_label(row):
     entity_label = next((l for l in row["labels"] if l != "Shadow"), "Node")
-    name = row.get("customerName") or row.get("name") or row["sourceId"]
+    name = row.get("name") or row["sourceId"]
     return f"{entity_label}: {name}"
 
 
@@ -104,7 +89,6 @@ def build_vis_graph(node_rows, edge_rows):
             "label": _display_label(row),
             "group": row["sourceGraph"],
             "color": _GROUP_COLORS.get(row["sourceGraph"], "#999999"),
-            "componentId": row.get("componentId"),
         }
 
     edges = []
@@ -141,7 +125,6 @@ def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
             "label": label,
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         }
         edges.append({
             "from": nid,
@@ -167,7 +150,6 @@ def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
             "label": f"Customer: {row.get('customerName') or source_id}",
             "group": "meridian",
             "color": _RISK_COLOR if source_id in risk_customer_ids else _GROUP_COLORS["meridian"],
-            "componentId": None,
         }
     edges = [
         {
@@ -203,7 +185,6 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
             "label": f"KYC: {kyc.get('riskRating') or 'Unknown'}",
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -221,7 +202,6 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
             "label": f"Loan Facility: {f['facilityId']} ({f.get('paymentStatus')})",
             "group": "meridian",
             "color": _RISK_COLOR if is_delinquent else _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -249,7 +229,6 @@ def build_credit_score_delta(customer_id, latest_score):
         "label": f"Credit Score: {latest_score.get('creditScore')} ({latest_score.get('scoreBand')})",
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -279,7 +258,6 @@ def build_loan_application_delta(customer_id, applications):
             "label": f"Loan Application: {application['applicationId']} ({application.get('status')})",
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -306,7 +284,6 @@ def build_transaction_summary_delta(customer_id, summary):
         "label": f"Transactions: {summary['transactionCount']} (net {'-' if net < 0 else '+'}${abs(net):,.2f})",
         "group": "meridian",
         "color": _RISK_COLOR if net < 0 else _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -335,7 +312,6 @@ def build_relationship_manager_delta(customer_id, relationship_manager):
         "label": f"{name} ({role})" if role else name,
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -369,7 +345,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
             "label": section_label,
             "group": "policy",
             "color": _GROUP_COLORS["policy"],
-            "componentId": None,
         },
     ]
     edges = [{
@@ -387,7 +362,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
             "label": f"{rule['ruleId']}: {rule.get('criterion')}",
             "group": "policy",
             "color": _GROUP_COLORS["policy"],
-            "componentId": None,
         })
         edges.append({
             "from": section_node_id,
@@ -404,7 +378,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
                 "label": rule["escalationRole"],
                 "group": "policy",
                 "color": _RISK_COLOR,
-                "componentId": None,
             })
             edges.append({
                 "from": rule_node_id,
@@ -439,7 +412,6 @@ def build_policy_failure_delta(customer_id, failed_rules):
             "label": f"{rule['ruleId']}: {rule.get('criterion')} (Failed)",
             "group": "policy",
             "color": _RISK_COLOR,
-            "componentId": None,
         })
         edges.append({
             "from": _node_id("meridian", customer_id),
@@ -472,7 +444,6 @@ def build_decision_delta(decisions):
             "label": f"{decision['recommendation']}: {decision.get('customerName') or decision['customerId']}",
             "group": "context",
             "color": _decision_color(decision),
-            "componentId": None,
         }
     return {"nodes": list(nodes.values()), "edges": []}
 
@@ -486,7 +457,6 @@ def _case_node(decision):
         "label": f"Case: {decision.get('customerName') or decision['customerId']}",
         "group": "context",
         "color": _GROUP_COLORS["context"],
-        "componentId": None,
     }
 
 
@@ -499,7 +469,6 @@ def _outcome_node(decision):
         "label": decision["recommendation"],
         "group": "context",
         "color": _decision_color(decision),
-        "componentId": None,
     }
 
 
@@ -513,7 +482,6 @@ def _shadow_rule_node(rule_id, criterion):
         "label": f"{rule_id}: {criterion or rule_id}",
         "group": "context",
         "color": _GROUP_COLORS["context"],
-        "componentId": None,
     }
 
 
@@ -657,21 +625,97 @@ def build_new_case_steps(new_decision, failed_rules):
     return steps
 
 
+def _ids_by_source_and_label(node_rows):
+    """Groups each shadowed node's sourceId by (sourceGraph, entity label),
+    so the live structural-edge lookups below can be scoped to exactly
+    what's already on canvas instead of pulling a whole source graph's
+    structure."""
+    ids = {}
+    for row in node_rows:
+        entity_label = next((l for l in row["labels"] if l != "Shadow"), None)
+        if entity_label is None:
+            continue
+        ids.setdefault((row["sourceGraph"], entity_label), []).append(row["sourceId"])
+    return ids
+
+
+def _fetch_live_structural_edges(session, node_rows):
+    """The canvas's "connected neighborhood around a match" used to come
+    from a copy of these relationships stored in shadowDb. They're read
+    live from their real source graph instead (meridian/documents), scoped
+    to whichever nodes are already shadowed -- every one of them already
+    lives entirely inside one constituent, so none of them ever actually
+    needed shadowing; only SIMILAR_TO (a genuine cross-constituent link)
+    does."""
+    ids = _ids_by_source_and_label(node_rows)
+    customer_ids = ids.get(("meridian", "Customer"), [])
+    account_ids = ids.get(("meridian", "Account"), [])
+    person_ids = ids.get(("documents", "Person"), [])
+    org_ids = ids.get(("documents", "Organization"), [])
+    doc_account_ids = ids.get(("documents", "Account"), [])
+    property_ids = ids.get(("documents", "Property"), [])
+    loan_request_ids = ids.get(("documents", "LoanRequest"), [])
+
+    edges = []
+    for row in matching.fetch_meridian_account_ownership_for(session, customer_ids, account_ids):
+        edges.append(("meridian", row["customerId"], "meridian", row["accountId"], "OWNS_ACCOUNT"))
+    for row in matching.fetch_meridian_customer_hierarchy_for(session, customer_ids):
+        edges.append(("meridian", row["customerId"], "meridian", row["parentCustomerId"], "HAS_PARENT"))
+    for row in matching.fetch_document_worked_at_for(session, person_ids, org_ids):
+        edges.append(("documents", row["personId"], "documents", row["organizationId"], "WORKED_AT"))
+    for row in matching.fetch_document_authorized_for_for(session, person_ids, doc_account_ids):
+        edges.append(("documents", row["personId"], "documents", row["accountId"], "AUTHORIZED_FOR"))
+    for row in matching.fetch_document_co_owns_for(session, person_ids, property_ids):
+        edges.append(("documents", row["personId"], "documents", row["propertyId"], "CO_OWNS"))
+    for row in matching.fetch_document_ownership_for(session, person_ids, org_ids):
+        edges.append(("documents", row["personId"], "documents", row["organizationId"], "OWNS"))
+    for row in matching.fetch_document_requests_for(session, org_ids, loan_request_ids):
+        edges.append(("documents", row["organizationId"], "documents", row["loanRequestId"], "REQUESTS"))
+
+    return [
+        {
+            "fromSourceGraph": from_graph, "fromSourceId": from_id,
+            "toSourceGraph": to_graph, "toSourceId": to_id,
+            "relType": rel_type, "confidence": None, "matchType": None,
+        }
+        for from_graph, from_id, to_graph, to_id, rel_type in edges
+    ]
+
+
 def fetch_graph_json(session):
     node_rows = [dict(r) for r in session.run(_FETCH_NODES)]
-    edge_rows = [dict(r) for r in session.run(_FETCH_EDGES)]
-    return build_vis_graph(node_rows, edge_rows)
+    match_edge_rows = [dict(r) for r in session.run(_FETCH_SIMILAR_TO_EDGES)]
+    structural_edge_rows = _fetch_live_structural_edges(session, node_rows)
+    return build_vis_graph(node_rows, match_edge_rows + structural_edge_rows)
 
 
 def fetch_documents_graph_json(session):
     node_rows = [dict(r) for r in session.run(_FETCH_DOCUMENTS_NODES)]
-    edge_rows = [dict(r) for r in session.run(_FETCH_DOCUMENTS_EDGES)]
-    return build_vis_graph(node_rows, edge_rows)
+    structural_edge_rows = _fetch_live_structural_edges(session, node_rows)
+    return build_vis_graph(node_rows, structural_edge_rows)
 
 
 def fetch_hierarchy_neighborhood(session, customer_id, max_hops=4):
-    query = _FETCH_HIERARCHY_NEIGHBORHOOD.format(max_hops=max_hops)
-    return [dict(r) for r in session.run(query, customerId=customer_id)]
+    """Walks the HAS_PARENT corporate hierarchy outward from customer_id,
+    one hop at a time -- the meridian Virtual Graph doesn't support
+    variable-length relationship patterns (`*1..n`), only simple
+    MATCH...RETURN, so the multi-hop walk itself happens here in Python
+    instead of in one Cypher query."""
+    visited = {customer_id}
+    frontier = {customer_id}
+    names = {}
+    for _ in range(max_hops):
+        if not frontier:
+            break
+        next_frontier = set()
+        for row in matching.fetch_meridian_customer_hierarchy_neighbors_for(session, frontier):
+            names[row["sourceId"]] = row.get("customerName")
+            if row["sourceId"] not in visited:
+                visited.add(row["sourceId"])
+                next_frontier.add(row["sourceId"])
+        frontier = next_frontier
+    visited.discard(customer_id)
+    return [{"sourceId": sid, "customerName": names.get(sid)} for sid in sorted(visited)]
 
 
 def fetch_hierarchy_edges(session, ids):

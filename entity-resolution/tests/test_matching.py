@@ -126,15 +126,23 @@ def test_fetch_document_persons_uses_documents_constituent(fake_session):
     assert "coalesce(p.name, p.fullName)" in query
 
 
-def test_fetch_meridian_account_ownership_uses_meridian_constituent(fake_session):
+def test_fetch_meridian_account_ownership_for_uses_meridian_constituent(fake_session):
     fake_session.when("OWNS_ACCOUNT", [{"customerId": "C1", "accountId": "A1"}])
 
-    rows = matching.fetch_meridian_account_ownership(fake_session)
+    rows = matching.fetch_meridian_account_ownership_for(fake_session, ["C1"], ["A1"])
 
     assert rows == [{"customerId": "C1", "accountId": "A1"}]
-    query, _ = fake_session.calls[0]
+    query, params = fake_session.calls[0]
     assert "USE meridianComposite.meridian" in query
     assert "OWNS_ACCOUNT" in query
+    assert params["customerIds"] == ["C1"]
+    assert params["accountIds"] == ["A1"]
+
+
+def test_fetch_meridian_account_ownership_for_skips_query_with_no_ids(fake_session):
+    assert matching.fetch_meridian_account_ownership_for(fake_session, [], ["A1"]) == []
+    assert matching.fetch_meridian_account_ownership_for(fake_session, ["C1"], []) == []
+    assert fake_session.calls == []
 
 
 def test_fetch_document_loan_requests_uses_documents_constituent(fake_session):
@@ -180,38 +188,65 @@ def test_fetch_document_properties_uses_documents_constituent(fake_session):
     assert "USE meridianComposite.documents" in query
 
 
-def test_fetch_document_worked_at(fake_session):
+def test_fetch_document_worked_at_for(fake_session):
     fake_session.when("WORKED_AT", [{"personId": "p1", "organizationId": "o1"}])
 
-    rows = matching.fetch_document_worked_at(fake_session)
+    rows = matching.fetch_document_worked_at_for(fake_session, ["p1"], ["o1"])
 
     assert rows == [{"personId": "p1", "organizationId": "o1"}]
 
 
-def test_fetch_document_authorized_for(fake_session):
+def test_fetch_document_worked_at_for_skips_query_with_no_ids(fake_session):
+    assert matching.fetch_document_worked_at_for(fake_session, [], ["o1"]) == []
+    assert fake_session.calls == []
+
+
+def test_fetch_document_authorized_for_for(fake_session):
     fake_session.when("AUTHORIZED_FOR", [{"personId": "p1", "accountId": "a1"}])
 
-    rows = matching.fetch_document_authorized_for(fake_session)
+    rows = matching.fetch_document_authorized_for_for(fake_session, ["p1"], ["a1"])
 
     assert rows == [{"personId": "p1", "accountId": "a1"}]
 
 
-def test_fetch_document_co_owns(fake_session):
+def test_fetch_document_co_owns_for(fake_session):
     fake_session.when("CO_OWNS", [{"personId": "p1", "propertyId": "pr1"}])
 
-    rows = matching.fetch_document_co_owns(fake_session)
+    rows = matching.fetch_document_co_owns_for(fake_session, ["p1"], ["pr1"])
 
     assert rows == [{"personId": "p1", "propertyId": "pr1"}]
 
 
-def test_fetch_meridian_customer_hierarchy_uses_meridian_constituent(fake_session):
+def test_fetch_meridian_customer_hierarchy_neighbors_for_uses_meridian_constituent(fake_session):
+    fake_session.when("HAS_PARENT", [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}])
+
+    rows = matching.fetch_meridian_customer_hierarchy_neighbors_for(fake_session, ["C001"])
+
+    assert rows == [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}]
+    query, params = fake_session.calls[0]
+    assert "USE meridianComposite.meridian" in query
+    assert "*" not in query  # no variable-length pattern -- unsupported on the Virtual Graph
+    assert params["customerIds"] == ["C001"]
+
+
+def test_fetch_meridian_customer_hierarchy_neighbors_for_skips_query_with_no_ids(fake_session):
+    assert matching.fetch_meridian_customer_hierarchy_neighbors_for(fake_session, []) == []
+    assert fake_session.calls == []
+
+
+def test_fetch_meridian_customer_hierarchy_for_uses_meridian_constituent(fake_session):
     fake_session.when("HAS_PARENT", [{"customerId": "C001", "parentCustomerId": "C082"}])
 
-    rows = matching.fetch_meridian_customer_hierarchy(fake_session)
+    rows = matching.fetch_meridian_customer_hierarchy_for(fake_session, ["C001", "C082"])
 
     assert rows == [{"customerId": "C001", "parentCustomerId": "C082"}]
     query, _ = fake_session.calls[0]
     assert "USE meridianComposite.meridian" in query
+
+
+def test_fetch_meridian_customer_hierarchy_for_skips_query_with_no_ids(fake_session):
+    assert matching.fetch_meridian_customer_hierarchy_for(fake_session, []) == []
+    assert fake_session.calls == []
 
 
 def test_fetch_meridian_customer_facilities_uses_meridian_constituent(fake_session):
@@ -329,15 +364,28 @@ def test_fetch_lending_policy_rules_uses_lendingpolicy_constituent(fake_session)
     assert params["productTypeCode"] == "LN-TERM"
 
 
-def test_fetch_document_ownership_uses_documents_constituent(fake_session):
+def test_fetch_document_ownership_for_uses_documents_constituent(fake_session):
     fake_session.when(
-        "MATCH (p:Person)-[r:OWNS]->(o:Organization)",
-        [{"personId": "p1", "organizationId": "o1", "pct": 70, "role": "Founder & CEO"}],
+        "MATCH (p:Person)-[:OWNS]->(o:Organization)",
+        [{"personId": "p1", "organizationId": "o1"}],
     )
 
-    rows = matching.fetch_document_ownership(fake_session)
+    rows = matching.fetch_document_ownership_for(fake_session, ["p1"], ["o1"])
 
-    assert rows == [{"personId": "p1", "organizationId": "o1", "pct": 70, "role": "Founder & CEO"}]
+    assert rows == [{"personId": "p1", "organizationId": "o1"}]
+    query, _ = fake_session.calls[0]
+    assert "USE meridianComposite.documents" in query
+
+
+def test_fetch_document_requests_for_uses_documents_constituent(fake_session):
+    fake_session.when(
+        "MATCH (o:Organization)-[:REQUESTS]->(lr:LoanRequest)",
+        [{"organizationId": "o1", "loanRequestId": "lr1"}],
+    )
+
+    rows = matching.fetch_document_requests_for(fake_session, ["o1"], ["lr1"])
+
+    assert rows == [{"organizationId": "o1", "loanRequestId": "lr1"}]
     query, _ = fake_session.calls[0]
     assert "USE meridianComposite.documents" in query
 

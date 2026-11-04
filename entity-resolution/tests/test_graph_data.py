@@ -1,15 +1,15 @@
-from resolver import graph_data
+from resolver import graph_data, matching
 
 
 def test_build_vis_graph_dedupes_nodes_and_preserves_edge_direction():
     node_rows = [
         {
             "sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-            "componentId": 0, "customerName": "Jane Doe", "name": None,
+            "name": "Jane Doe",
         },
         {
             "sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"],
-            "componentId": 0, "customerName": None, "name": "Jane Doe",
+            "name": "Jane Doe",
         },
     ]
     edge_rows = [
@@ -35,9 +35,9 @@ def test_build_vis_graph_keeps_structural_edge_direction_even_when_ids_sort_the_
     # relationship is Customer -[:OWNS_ACCOUNT]-> Account.
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-         "componentId": 0, "customerName": "Jane Doe", "name": None},
+         "name": "Jane Doe"},
         {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"],
-         "componentId": 0, "customerName": None, "name": None},
+         "name": None},
     ]
     edge_rows = [
         {"fromSourceGraph": "meridian", "fromSourceId": "C1",
@@ -55,9 +55,9 @@ def test_build_vis_graph_keeps_structural_edge_direction_even_when_ids_sort_the_
 def test_build_vis_graph_marks_match_edges_as_dashed():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-         "componentId": 0, "customerName": "Jane Doe", "name": None},
+         "name": "Jane Doe"},
         {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"],
-         "componentId": 0, "customerName": None, "name": "Jane Doe"},
+         "name": "Jane Doe"},
     ]
     edge_rows = [
         {"fromSourceGraph": "meridian", "fromSourceId": "C1",
@@ -71,16 +71,42 @@ def test_build_vis_graph_marks_match_edges_as_dashed():
     assert graph["edges"][0]["title"] == "confidence: 0.9"
 
 
-def test_fetch_hierarchy_neighborhood_uses_shadowdb_and_max_hops(fake_session):
+def test_fetch_hierarchy_neighborhood_walks_has_parent_one_hop_at_a_time(fake_session):
+    # The meridian Virtual Graph doesn't support variable-length relationship
+    # patterns, so this walks hop-by-hop in Python instead of one `*1..n`
+    # Cypher query -- the single-hop query is reused unchanged on every hop.
     fake_session.when("HAS_PARENT", [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}])
 
     rows = graph_data.fetch_hierarchy_neighborhood(fake_session, "C001", max_hops=4)
 
     assert rows == [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}]
     query, params = fake_session.calls[0]
-    assert "USE meridianComposite.shadowDb" in query
-    assert "*1..4" in query
-    assert params["customerId"] == "C001"
+    assert "USE meridianComposite.meridian" in query
+    assert params["customerIds"] == ["C001"]
+
+
+def test_fetch_hierarchy_neighborhood_discovers_a_second_hop_without_revisiting(monkeypatch):
+    hop_responses = {
+        frozenset({"C001"}): [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}],
+        frozenset({"C082"}): [
+            {"sourceId": "C001", "customerName": "Rosa's Bakery"},
+            {"sourceId": "C083", "customerName": "Cedarville Investment Group"},
+        ],
+        frozenset({"C083"}): [{"sourceId": "C082", "customerName": "Alvarez Family Holdings LLC"}],
+    }
+    calls = []
+
+    def fake_fetch(session, customer_ids):
+        calls.append(set(customer_ids))
+        return hop_responses.get(frozenset(customer_ids), [])
+
+    monkeypatch.setattr(matching, "fetch_meridian_customer_hierarchy_neighbors_for", fake_fetch)
+
+    rows = graph_data.fetch_hierarchy_neighborhood(None, "C001", max_hops=4)
+
+    assert {r["sourceId"] for r in rows} == {"C082", "C083"}
+    # Stops once a hop discovers nothing new, well short of max_hops.
+    assert calls == [{"C001"}, {"C082"}, {"C083"}]
 
 
 def test_fetch_hierarchy_edges_passes_id_list(fake_session):
@@ -233,7 +259,7 @@ def test_build_relationship_manager_delta_labels_name_and_role():
     assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
     assert nodes_by_id["meridian:EMP002"] == {
         "id": "meridian:EMP002", "label": "Jamie Arnold (Relationship Manager)",
-        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"],
     }
     assert delta["edges"] == [{
         "from": "meridian:C001", "to": "meridian:EMP002",
@@ -452,10 +478,63 @@ def test_build_new_case_steps_handles_no_failed_rules():
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],
-         "componentId": 1, "customerName": "Solo Corp", "name": None},
+        "name": "Solo Corp"},
     ]
 
     graph = graph_data.build_vis_graph(node_rows, [])
 
     assert len(graph["nodes"]) == 1
     assert graph["edges"] == []
+
+
+def test_ids_by_source_and_label_buckets_by_entity_label_not_sourcegraph_alone():
+    node_rows = [
+        {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"]},
+        {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"]},
+        {"sourceGraph": "documents", "sourceId": "a1", "labels": ["Shadow", "Account"]},
+    ]
+
+    ids = graph_data._ids_by_source_and_label(node_rows)
+
+    assert ids[("meridian", "Customer")] == ["C1"]
+    assert ids[("meridian", "Account")] == ["A1"]
+    assert ids[("documents", "Account")] == ["a1"]
+
+
+def test_fetch_graph_json_merges_similar_to_with_a_live_structural_edge(fake_session):
+    fake_session.when(
+        "MATCH (n:Shadow)\nRETURN",
+        [
+            {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"], "name": "Rosa's Bakery"},
+            {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"], "name": None},
+        ],
+    )
+    fake_session.when("[r:SIMILAR_TO]", [])
+    fake_session.when("OWNS_ACCOUNT", [{"customerId": "C1", "accountId": "A1"}])
+
+    graph = graph_data.fetch_graph_json(fake_session)
+
+    assert {n["id"] for n in graph["nodes"]} == {"meridian:C1", "meridian:A1"}
+    assert graph["edges"] == [{
+        "from": "meridian:C1", "to": "meridian:A1",
+        "label": "OWNS_ACCOUNT", "title": "OWNS_ACCOUNT", "dashes": False,
+    }]
+
+
+def test_fetch_documents_graph_json_reads_structural_edges_live_not_from_shadowdb(fake_session):
+    fake_session.when(
+        "MATCH (n:Shadow {sourceGraph: 'documents'})",
+        [
+            {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"], "name": "Rosa Alvarez"},
+            {"sourceGraph": "documents", "sourceId": "o1", "labels": ["Shadow", "Organization"], "name": "Rosa's Bakery"},
+        ],
+    )
+    fake_session.when("WORKED_AT", [{"personId": "p1", "organizationId": "o1"}])
+
+    graph = graph_data.fetch_documents_graph_json(fake_session)
+
+    assert any(c[0].strip().startswith("USE meridianComposite.documents") for c in fake_session.calls[1:])
+    assert graph["edges"] == [{
+        "from": "documents:p1", "to": "documents:o1",
+        "label": "WORKED_AT", "title": "WORKED_AT", "dashes": False,
+    }]
