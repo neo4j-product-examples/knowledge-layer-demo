@@ -52,31 +52,27 @@ def get_anthropic_client():
     return _anthropic_client
 
 
-def ensure_meridian_seeded():
-    """Idempotent: seeds shadowDb with Nordtell shadow nodes if missing
-    (requirements §5.1, §7.1). Just identity copies -- a customer's
-    accounts, corporate hierarchy, etc. stay in meridian itself and are
-    read live by graph_data when the canvas needs them."""
-    with db.get_session(get_driver()) as session:
-        if not shadow_nodes.meridian_shadow_nodes_exist(session):
-            customers = matching.fetch_meridian_customers(session)
-            accounts = matching.fetch_meridian_accounts(session)
-            shadow_nodes.seed_meridian_shadow_nodes(session, customers, accounts)
-
-
 @app.route("/")
 def index():
+    """Never writes shadowDb's meridian-side identity nodes -- that's
+    scripts/seed_shadowdb.py's job, run once outside the app (requirements
+    §5.1). A page load that could seed on the fly is exactly how stale
+    data kept reappearing: every request would silently re-derive and
+    re-merge it, so any old copy of this code pointed at the same shared
+    database would keep writing it back. This just checks (read-only) that
+    seeding has happened, and tells the operator to run the script if not."""
     _chat_history.clear()
     try:
-        ensure_meridian_seeded()
         with db.get_session(get_driver()) as session:
+            if not shadow_nodes.meridian_shadow_nodes_exist(session):
+                raise RuntimeError("shadowDb has not been seeded yet")
             shadow_nodes.clear_document_shadow_data(session)
             matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
-        logger.exception("Failed to seed Nordtell shadow nodes")
+        logger.exception("shadowDb is not ready")
         return render_template("index.html", error=(
-            "Could not reach the composite database to seed shadow nodes. "
-            "Check that the meridianComposite DBMS is running."
+            "shadowDb hasn't been seeded yet, or the composite database is unreachable. "
+            "Run `python3 scripts/seed_shadowdb.py` once, then reload."
         ), bloom_url=BLOOM_URL)
     return render_template("index.html", error=None, bloom_url=BLOOM_URL)
 

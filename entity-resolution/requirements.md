@@ -72,18 +72,23 @@ Every `SIMILAR_TO` edge must carry:
 
 ## 5. Shadow node model (written to `shadowDb`)
 
-### 5.1 Nordtell seeding (happens first, independent of any document)
-On app startup, if `shadowDb` does not yet contain shadow nodes for the
-`meridian` constituent, create them:
+### 5.1 Nordtell seeding (run once, outside the app, independent of any document)
+Run via `scripts/seed_shadowdb.py` by hand -- once, or whenever meridian's
+customer/account list changes -- never from the Flask app itself:
 - For every `meridian.Customer` and `meridian.Account`, `MERGE` a shadow
   node in `shadowDb` labeled `:Shadow:<OriginalLabel>`, with
-  `sourceGraph: "meridian"` and `sourceId` set to the original key
-  (`customerId` / `accountId`), copying the other identifying properties.
-- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to run
-  on every startup without creating duplicates or re-seeding if already
-  present.
-- This seeding step does not depend on any document being uploaded — it
-  reflects the operational banking system as it exists in `meridian`.
+  `sourceGraph: "meridian"`, `sourceId` set to the original key
+  (`customerId` / `accountId`), and just enough to display it (`name`) --
+  not a copy of the full record, which stays in `meridian` and is read
+  live when needed (see §2).
+- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to
+  re-run without creating duplicates.
+- The app (`index()`) only ever reads this seeding's result (a check that
+  it exists, surfacing an error if not) -- it never writes these nodes
+  itself. A page load that could seed on the fly was exactly how stale
+  data kept reappearing: any old copy of the app pointed at the same
+  shared database would silently re-derive and re-write it on every
+  request.
 
 ### 5.2 Document-side shadow nodes + linking (triggered by Upload Document)
 For every match found between `documents` and the existing Nordtell shadow
@@ -99,10 +104,12 @@ nodes (§4):
 
 ## 6. Web app behavior (MVP)
 
-1. **On startup**, the backend runs the Nordtell seeding step (§5.1) if
-   needed. **On page load**, the app queries `shadowDb` and renders
-   whatever Nordtell shadow nodes already exist as the initial graph view
-   — the user sees these immediately, with no button click required.
+1. **On page load**, the backend only checks that the Nordtell seeding
+   step (§5.1) has already been run (read-only -- it never runs that
+   seeding itself) and surfaces an error if not, then queries `shadowDb`
+   and renders whatever Nordtell shadow nodes already exist as the
+   initial graph view — the user sees these immediately, with no button
+   click required.
 2. The same page has an **Upload Document** button. The document is
    already present on disk for this MVP — the button just triggers the
    rest of the pipeline (no real upload UI needed yet).
