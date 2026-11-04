@@ -59,7 +59,7 @@ def test_run_find_customer_builds_matches_payload_and_applies_matches(monkeypatc
     applied = []
     monkeypatch.setattr(
         shadow_nodes, "apply_document_matches",
-        lambda s, matches, label, lookup: applied.append((label, matches)),
+        lambda s, matches, label, lookup, meridian_lookup: applied.append((label, matches)),
     )
 
     result = chat.run_find_customer(fake_session)

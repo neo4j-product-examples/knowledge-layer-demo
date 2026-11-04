@@ -388,10 +388,13 @@ def run_find_customer(session):
     person_matches = [m for m in customer_matches if m["documents_id"] in person_lookup]
     org_matches = [m for m in customer_matches if m["documents_id"] in org_lookup]
 
-    shadow_nodes.apply_document_matches(session, person_matches, "Person", person_lookup)
-    shadow_nodes.apply_document_matches(session, org_matches, "Organization", org_lookup)
-
     meridian_customer_by_id = {c["customerId"]: c for c in meridian_customers}
+
+    # Only the two endpoints of an accepted match ever get shadowed -- an
+    # entity that doesn't match anything is never written to shadowDb at
+    # all (see shadow_nodes.apply_document_matches).
+    shadow_nodes.apply_document_matches(session, person_matches, "Person", person_lookup, meridian_customer_by_id)
+    shadow_nodes.apply_document_matches(session, org_matches, "Organization", org_lookup, meridian_customer_by_id)
 
     delta = graph_data.build_match_delta(customer_matches, meridian_customer_by_id)
 

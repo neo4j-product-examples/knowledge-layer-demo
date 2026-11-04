@@ -519,19 +519,38 @@ def test_fetch_graph_json_merges_similar_to_with_a_live_structural_edge(fake_ses
     }]
 
 
-def test_fetch_documents_graph_json_reads_structural_edges_live_not_from_shadowdb(fake_session):
-    fake_session.when(
-        "MATCH (n:Shadow {sourceGraph: 'documents'})",
-        [
-            {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"], "name": "Rosa Alvarez"},
-            {"sourceGraph": "documents", "sourceId": "o1", "labels": ["Shadow", "Organization"], "name": "Rosa's Bakery"},
-        ],
-    )
+def test_fetch_documents_graph_json_is_built_live_not_from_shadowdb(fake_session):
+    persons = [{"__id__": "p1", "name": "Rosa Alvarez"}]
+    organizations = [{"__id__": "o1", "name": "Rosa's Bakery"}]
     fake_session.when("WORKED_AT", [{"personId": "p1", "organizationId": "o1"}])
 
-    graph = graph_data.fetch_documents_graph_json(fake_session)
+    graph = graph_data.fetch_documents_graph_json(fake_session, persons, organizations)
 
-    assert any(c[0].strip().startswith("USE meridianComposite.documents") for c in fake_session.calls[1:])
+    assert {n["id"] for n in graph["nodes"]} == {"documents:p1", "documents:o1"}
+    assert graph["edges"] == [{
+        "from": "documents:p1", "to": "documents:o1",
+        "label": "WORKED_AT", "title": "WORKED_AT", "dashes": False,
+    }]
+    # No read of shadowDb at all -- every call here targets documents/meridian live.
+    assert not any("shadowDb" in q for q, _ in fake_session.calls)
+
+
+def test_build_documents_graph_labels_persons_organizations_and_loan_requests():
+    persons = [{"__id__": "p1", "name": "Rosa Alvarez"}]
+    organizations = [{"__id__": "o1", "name": "Rosa's Bakery"}]
+    loan_requests = [{"__id__": "lr1", "requestedAmount": 400000, "termYears": 10, "rateType": "Fixed"}]
+    edge_rows = [{
+        "fromSourceGraph": "documents", "fromSourceId": "p1",
+        "toSourceGraph": "documents", "toSourceId": "o1",
+        "relType": "WORKED_AT", "confidence": None, "matchType": None,
+    }]
+
+    graph = graph_data.build_documents_graph(persons, organizations, loan_requests, edge_rows)
+
+    labels = {n["id"]: n["label"] for n in graph["nodes"]}
+    assert labels["documents:p1"] == "Person: Rosa Alvarez"
+    assert labels["documents:o1"] == "Organization: Rosa's Bakery"
+    assert labels["documents:lr1"] == "LoanRequest: $400,000 10-yr Fixed Loan Request"
     assert graph["edges"] == [{
         "from": "documents:p1", "to": "documents:o1",
         "label": "WORKED_AT", "title": "WORKED_AT", "dashes": False,

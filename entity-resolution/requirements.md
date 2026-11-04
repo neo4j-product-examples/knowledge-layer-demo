@@ -68,54 +68,46 @@ Every `SIMILAR_TO` edge must carry:
 
 ## 5. Shadow node model (written to `shadowDb`)
 
-### 5.1 Nordtell seeding (run once, outside the app, independent of any document)
-Run via `scripts/seed_shadowdb.py` by hand -- once, or whenever meridian's
-customer list changes -- never from the Flask app itself:
-- For every `meridian.Customer`, `MERGE` a shadow node in `shadowDb`
-  labeled `:Shadow:Customer`, with `sourceGraph: "meridian"`, `sourceId`
-  set to `customerId`, and just enough to display it (`name`) -- not a
-  copy of the full record, which stays in `meridian` and is read live
-  when needed (see §2).
-- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to
-  re-run without creating duplicates.
-- The app (`index()`) only ever reads this seeding's result (a check that
-  it exists, surfacing an error if not) -- it never writes these nodes
-  itself. A page load that could seed on the fly was exactly how stale
-  data kept reappearing: any old copy of the app pointed at the same
-  shared database would silently re-derive and re-write it on every
-  request.
+Nothing is pre-seeded. A `:Shadow` node exists only as the endpoint of a
+real `SIMILAR_TO` match -- matching always runs against data fetched fresh
+from `meridian`/`documents` (never from a pre-existing shadow copy), and
+only once a match is accepted does either side get written to `shadowDb`:
 
-### 5.2 Document-side shadow nodes + linking (triggered by Upload Document)
-For every match found between `documents` and the existing Nordtell shadow
-nodes (§4):
-1. `MERGE` a shadow node in `shadowDb` for the matching `documents` node:
+1. For the matched `meridian.Customer`, `MERGE` a shadow node in
+   `shadowDb` labeled `:Shadow:Customer`, with `sourceGraph: "meridian"`,
+   `sourceId` set to `customerId`, and just enough to display it (`name`)
+   -- not a copy of the full record, which stays in `meridian` and is read
+   live when needed (see §2).
+2. For the matched `documents` node, `MERGE` a shadow node in `shadowDb`:
    `:Shadow:<OriginalLabel>` with `sourceGraph: "documents"` and `sourceId`
-   set to the original key, copying identifying properties.
-2. Connect it to the existing Nordtell shadow node (from §5.1) with
-   `SIMILAR_TO` (properties per §4.3).
-3. Idempotency requirement: re-running the pipeline on the same source data
-   must not create duplicate shadow nodes or edges (`MERGE` on
+   set to the original key, same identity-only shape.
+3. Connect the two with `SIMILAR_TO` (properties per §4.3).
+4. Idempotency requirement: re-running the pipeline on the same source
+   data must not create duplicate shadow nodes or edges (`MERGE` on
    `(sourceGraph, sourceId)` for nodes, and on the node pair for edges).
+5. An entity that never matches anything is never shadowed at all -- the
+   initial "documents-only" canvas view, and anywhere else an unmatched
+   entity needs to be shown, is built from a live read of its own source
+   graph instead (see `graph_data.build_documents_graph`).
+6. On every page load, any `:Shadow` node left with no `SIMILAR_TO` edge
+   (a match from a previous demo run) is deleted, so state never carries
+   from one run into the next.
 
 ## 6. Web app behavior (MVP)
 
-1. **On page load**, the backend only checks that the Nordtell seeding
-   step (§5.1) has already been run (read-only -- it never runs that
-   seeding itself) and surfaces an error if not, then queries `shadowDb`
-   and renders whatever Nordtell shadow nodes already exist as the
-   initial graph view — the user sees these immediately, with no button
-   click required.
+1. **On page load**, the backend clears any `:Shadow` node orphaned by a
+   previous run (§5.6) -- it never writes shadow nodes itself. The canvas
+   starts empty; nothing is shown until a document is uploaded.
 2. The same page has an **Upload Document** button. The document is
    already present on disk for this MVP — the button just triggers the
    rest of the pipeline (no real upload UI needed yet).
-3. On click, the backend runs, in order:
-   a. Candidate matching queries (§4) between `documents` and the existing
-      Nordtell shadow nodes, via the composite database.
-   b. Document-side shadow node + `SIMILAR_TO` creation in `shadowDb`
-      (§5.2).
-4. The page then re-renders the embedded graph view (shadow nodes,
-   `SIMILAR_TO` edges shown) so the user can visually inspect which
-   entities were resolved as the same.
+3. Finding a match (today, the `find_customer` chat tool) runs, in order:
+   a. Candidate matching queries (§4) between `documents` and `meridian`,
+      fetched live, not against any pre-existing shadow copy.
+   b. For each accepted match, shadow node + `SIMILAR_TO` creation in
+      `shadowDb` (§5).
+4. The page then re-renders the embedded graph view so the user can
+   visually inspect which entities were resolved as the same.
 5. Errors at any stage (e.g. composite database unreachable) must surface
    a clear message in the UI, not a stack trace.
 
