@@ -72,64 +72,61 @@ Every `SIMILAR_TO` edge must carry:
 
 ## 5. Shadow node model (written to `shadowDb`)
 
-### 5.1 Meridian seeding (happens first, independent of any document)
-On app startup, if `shadowDb` does not yet contain shadow nodes for the
-`meridian` constituent, create them:
+### 5.1 Nordtell seeding (run once, outside the app, independent of any document)
+Run via `scripts/seed_shadowdb.py` by hand -- once, or whenever meridian's
+customer/account list changes -- never from the Flask app itself:
 - For every `meridian.Customer` and `meridian.Account`, `MERGE` a shadow
   node in `shadowDb` labeled `:Shadow:<OriginalLabel>`, with
-  `sourceGraph: "meridian"` and `sourceId` set to the original key
-  (`customerId` / `accountId`), copying the other identifying properties.
-- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to run
-  on every startup without creating duplicates or re-seeding if already
-  present.
-- This seeding step does not depend on any document being uploaded — it
-  reflects the operational banking system as it exists in `meridian`.
+  `sourceGraph: "meridian"`, `sourceId` set to the original key
+  (`customerId` / `accountId`), and just enough to display it (`name`) --
+  not a copy of the full record, which stays in `meridian` and is read
+  live when needed (see §2).
+- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to
+  re-run without creating duplicates.
+- The app (`index()`) only ever reads this seeding's result (a check that
+  it exists, surfacing an error if not) -- it never writes these nodes
+  itself. A page load that could seed on the fly was exactly how stale
+  data kept reappearing: any old copy of the app pointed at the same
+  shared database would silently re-derive and re-write it on every
+  request.
 
 ### 5.2 Document-side shadow nodes + linking (triggered by Upload Document)
-For every match found between `documents` and the existing Meridian shadow
+For every match found between `documents` and the existing Nordtell shadow
 nodes (§4):
 1. `MERGE` a shadow node in `shadowDb` for the matching `documents` node:
    `:Shadow:<OriginalLabel>` with `sourceGraph: "documents"` and `sourceId`
    set to the original key, copying identifying properties.
-2. Connect it to the existing Meridian shadow node (from §5.1) with
+2. Connect it to the existing Nordtell shadow node (from §5.1) with
    `SIMILAR_TO` (properties per §4.4).
 3. Idempotency requirement: re-running the pipeline on the same source data
    must not create duplicate shadow nodes or edges (`MERGE` on
    `(sourceGraph, sourceId)` for nodes, and on the node pair for edges).
 
-## 6. Weakly Connected Components step
+## 6. Web app behavior (MVP)
 
-- After shadow nodes + `SIMILAR_TO` edges exist in `shadowDb`, run WCC
-  over that graph (Neo4j GDS `gds.wcc` if the GDS plugin is available on
-  that Aura instance; otherwise a pure-Cypher fallback implementation).
-- Write the resulting `componentId` back onto each shadow node.
-- Two shadow nodes in the same component are considered **the same
-  real-world entity** across `meridian` and `documents`.
-
-## 7. Web app behavior (MVP)
-
-1. **On startup**, the backend runs the Meridian seeding step (§5.1) if
-   needed. **On page load**, the app queries `shadowDb` and renders
-   whatever Meridian shadow nodes already exist as the initial graph view
-   — the user sees these immediately, with no button click required.
+1. **On page load**, the backend only checks that the Nordtell seeding
+   step (§5.1) has already been run (read-only -- it never runs that
+   seeding itself) and surfaces an error if not, then queries `shadowDb`
+   and renders whatever Nordtell shadow nodes already exist as the
+   initial graph view — the user sees these immediately, with no button
+   click required.
 2. The same page has an **Upload Document** button. The document is
    already present on disk for this MVP — the button just triggers the
    rest of the pipeline (no real upload UI needed yet).
 3. On click, the backend runs, in order:
    a. Candidate matching queries (§4) between `documents` and the existing
-      Meridian shadow nodes, via the composite database.
+      Nordtell shadow nodes, via the composite database.
    b. Document-side shadow node + `SIMILAR_TO` creation in `shadowDb`
       (§5.2).
-   c. WCC over `shadowDb` (§6).
-4. The page then re-renders the embedded graph view (shadow nodes colored
-   by `componentId`, `SIMILAR_TO` edges shown) so the user can visually
-   inspect which entities were resolved as the same.
+4. The page then re-renders the embedded graph view (shadow nodes,
+   `SIMILAR_TO` edges shown) so the user can visually inspect which
+   entities were resolved as the same.
 5. Errors at any stage (e.g. composite database unreachable) must surface
    a clear message in the UI, not a stack trace.
 
-## 8. Testing strategy (TDD)
+## 7. Testing strategy (TDD)
 
-- All matching, shadow-node, and WCC logic must be unit-testable without a
+- All matching and shadow-node logic must be unit-testable without a
   live Neo4j connection — the Neo4j driver/session is injected and mocked
   in tests.
 - Test coverage required before implementation is considered done:
@@ -137,11 +134,10 @@ nodes (§4):
   - Match-candidate query construction for each of the three entity-type
     pairs.
   - Shadow node/edge Cypher generation and idempotency (`MERGE` semantics).
-  - WCC result parsing and component assignment.
 - A small number of integration tests may run against the real composite
   database, gated behind an environment flag, not run by default in CI.
 
-## 9. Out of scope (for this MVP)
+## 8. Out of scope (for this MVP)
 - Real file upload / document ingestion pipeline.
 - Authentication.
 - Editing/correcting matches from the UI.

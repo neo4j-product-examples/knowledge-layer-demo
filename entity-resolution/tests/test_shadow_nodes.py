@@ -22,7 +22,7 @@ def test_seed_meridian_customers_merges_on_source_graph_and_id(fake_session):
     assert "MERGE (n:Shadow:Customer" in query
     assert "USE meridianComposite.shadowDb" in query
     assert params["sourceGraph"] == "meridian"
-    assert params["rows"] == [{"sourceId": "C1", "properties": {"customerName": "Jane Doe", "customerType": "Individual"}}]
+    assert params["rows"] == [{"sourceId": "C1", "properties": {"name": "Jane Doe"}}]
 
 
 def test_seed_meridian_customers_skips_missing_id(fake_session):
@@ -78,71 +78,6 @@ def test_clear_document_shadow_data_deletes_documents_shadow_nodes(fake_session)
     assert "DETACH DELETE n" in query
 
 
-def test_create_shadow_relationship_merges_directed_edge(fake_session):
-    shadow_nodes.create_shadow_relationship(fake_session, "OWNS_ACCOUNT", "meridian", "C1", "meridian", "A1")
-
-    query, params = fake_session.calls[0]
-    assert "MERGE (a)-[r:OWNS_ACCOUNT]->(b)" in query
-    assert "USE meridianComposite.shadowDb" in query
-    assert params == {
-        "fromSourceGraph": "meridian",
-        "fromSourceId": "C1",
-        "toSourceGraph": "meridian",
-        "toSourceId": "A1",
-        "properties": {},
-    }
-
-
-def test_create_shadow_relationship_sets_given_properties(fake_session):
-    shadow_nodes.create_shadow_relationship(
-        fake_session, "OWNS", "documents", "p1", "documents", "o1", properties={"pct": 70, "role": "Founder & CEO"}
-    )
-
-    query, params = fake_session.calls[0]
-    assert "SET r += $properties" in query
-    assert params["properties"] == {"pct": 70, "role": "Founder & CEO"}
-
-
-def test_seed_meridian_account_ownership_batches_all_edges_into_one_call(fake_session):
-    edges = [{"customerId": "C1", "accountId": "A1"}, {"customerId": "C2", "accountId": "A2"}]
-
-    shadow_nodes.seed_meridian_account_ownership(fake_session, edges)
-
-    assert len(fake_session.calls) == 1
-    query, params = fake_session.calls[0]
-    assert "UNWIND $rows AS row" in query
-    assert "OWNS_ACCOUNT" in query
-    assert len(params["rows"]) == 2
-    assert params["rows"][0] == {
-        "fromSourceGraph": "meridian", "fromSourceId": "C1",
-        "toSourceGraph": "meridian", "toSourceId": "A1",
-        "properties": {},
-    }
-
-
-def test_seed_meridian_account_ownership_skips_missing_ids(fake_session):
-    shadow_nodes.seed_meridian_account_ownership(fake_session, [{"customerId": None, "accountId": "A1"}])
-    assert fake_session.calls == []
-
-
-def test_seed_meridian_customer_hierarchy_batches_all_edges_into_one_call(fake_session):
-    edges = [{"customerId": "C001", "parentCustomerId": "C082"}, {"customerId": "C002", "parentCustomerId": "C083"}]
-
-    shadow_nodes.seed_meridian_customer_hierarchy(fake_session, edges)
-
-    assert len(fake_session.calls) == 1
-    query, params = fake_session.calls[0]
-    assert "MERGE (a)-[r:HAS_PARENT]->(b)" in query
-    assert len(params["rows"]) == 2
-    assert params["rows"][0]["fromSourceId"] == "C001"
-    assert params["rows"][0]["toSourceId"] == "C082"
-
-
-def test_seed_meridian_customer_hierarchy_skips_missing_ids(fake_session):
-    shadow_nodes.seed_meridian_customer_hierarchy(fake_session, [{"customerId": "C001", "parentCustomerId": None}])
-    assert fake_session.calls == []
-
-
 def test_seed_document_shadow_nodes_creates_one_call_per_entity(fake_session):
     persons = [{"__id__": "p1", "customerID": None, "name": "Jane"}]
     organizations = [{"__id__": "o1", "name": "Acme"}]
@@ -170,6 +105,17 @@ def test_seed_document_shadow_nodes_skips_missing_ids(fake_session):
     assert fake_session.calls == []
 
 
+def test_seed_document_shadow_nodes_keeps_only_identity_properties(fake_session):
+    persons = [{"__id__": "p1", "customerID": "CUST-1", "name": "Jane"}]
+    accounts = [{"__id__": "a1", "accountID": "1", "accountNumber": "0001"}]
+
+    shadow_nodes.seed_document_shadow_nodes(fake_session, persons, [], accounts, [])
+
+    calls_by_label = {q.split("Shadow:")[1].split(" ")[0]: params for q, params in fake_session.calls}
+    assert calls_by_label["Person"]["rows"][0]["properties"] == {"name": "Jane"}
+    assert calls_by_label["Account"]["rows"][0]["properties"] == {}
+
+
 def test_seed_document_shadow_nodes_seeds_loan_request_with_readable_name(fake_session):
     shadow_nodes.seed_document_shadow_nodes(
         fake_session,
@@ -183,76 +129,7 @@ def test_seed_document_shadow_nodes_seeds_loan_request_with_readable_name(fake_s
     assert len(fake_session.calls) == 1
     query, params = fake_session.calls[0]
     assert "MERGE (n:Shadow:LoanRequest" in query
-    assert params["rows"][0]["properties"]["name"] == "$400,000 10-yr Fixed Loan Request"
-    assert params["rows"][0]["properties"]["applicationId"] == "APP-3001"
-
-
-def test_seed_document_relationships_creates_requests_edge(fake_session):
-    shadow_nodes.seed_document_relationships(
-        fake_session,
-        worked_at_edges=[], authorized_for_edges=[], co_owns_edges=[],
-        requests_edges=[{"organizationId": "o1", "__id__": "lr1"}],
-    )
-
-    assert len(fake_session.calls) == 1
-    query, params = fake_session.calls[0]
-    assert "MERGE (a)-[r:REQUESTS]->(b)" in query
-    assert params["rows"][0] == {
-        "fromSourceGraph": "documents", "fromSourceId": "o1",
-        "toSourceGraph": "documents", "toSourceId": "lr1",
-        "properties": {},
-    }
-
-
-def test_seed_document_relationships_creates_one_call_per_edge_type(fake_session):
-    shadow_nodes.seed_document_relationships(
-        fake_session,
-        worked_at_edges=[{"personId": "p1", "organizationId": "o1"}],
-        authorized_for_edges=[{"personId": "p1", "accountId": "a1"}],
-        co_owns_edges=[{"personId": "p1", "propertyId": "pr1"}],
-    )
-
-    assert len(fake_session.calls) == 3
-    queries = [q for q, _ in fake_session.calls]
-    assert any("WORKED_AT" in q for q in queries)
-    assert any("AUTHORIZED_FOR" in q for q in queries)
-    assert any("CO_OWNS" in q for q in queries)
-
-
-def test_seed_document_relationships_skips_missing_ids(fake_session):
-    shadow_nodes.seed_document_relationships(
-        fake_session,
-        worked_at_edges=[{"personId": None, "organizationId": "o1"}],
-        authorized_for_edges=[],
-        co_owns_edges=[],
-    )
-    assert fake_session.calls == []
-
-
-def test_seed_document_relationships_creates_ownership_edge_with_properties(fake_session):
-    shadow_nodes.seed_document_relationships(
-        fake_session,
-        worked_at_edges=[],
-        authorized_for_edges=[],
-        co_owns_edges=[],
-        ownership_edges=[{"personId": "p1", "organizationId": "o1", "pct": 70, "role": "Founder & CEO"}],
-    )
-
-    assert len(fake_session.calls) == 1
-    query, params = fake_session.calls[0]
-    assert "MERGE (a)-[r:OWNS]->(b)" in query
-    assert params["rows"][0]["properties"] == {"pct": 70, "role": "Founder & CEO"}
-
-
-def test_seed_document_relationships_skips_ownership_edges_with_missing_ids(fake_session):
-    shadow_nodes.seed_document_relationships(
-        fake_session,
-        worked_at_edges=[],
-        authorized_for_edges=[],
-        co_owns_edges=[],
-        ownership_edges=[{"personId": None, "organizationId": "o1"}],
-    )
-    assert fake_session.calls == []
+    assert params["rows"][0]["properties"] == {"name": "$400,000 10-yr Fixed Loan Request"}
 
 
 def test_apply_document_matches_creates_node_then_edge_batch(fake_session):

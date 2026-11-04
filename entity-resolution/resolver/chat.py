@@ -9,16 +9,16 @@ SYSTEM_PROMPT = """You are an assistant embedded in a graph exploration tool for
 
 Two graphs have been resolved into a shared shadow graph:
 - the "Business Plan Knowledge Graph": people/organizations/accounts extracted from a business plan document
-- the "Banking Virtual Graph": Meridian Bank's own customer, account, and risk data
+- the "Banking Virtual Graph": Nordtell Bank's own customer, account, and risk data
 
 Use the tools available to answer the user's questions and take the actions they ask for.
 Prefer calling a tool over guessing, and never invent names, IDs, or figures that a tool
 didn't return. Be concise in your final answers.
 
-If a request names a business (e.g. "Rosa's Bakery") rather than a Meridian customerId
+If a request names a business (e.g. "Rosa's Bakery") rather than a Nordtell customerId
 you already know from earlier in this conversation, you must call find_customer FIRST,
 before any other tool -- this is what connects the business plan's entities to an actual
-Meridian customer record, and every other tool needs that customerId as input.
+Nordtell customer record, and every other tool needs that customerId as input.
 
 For loan-decision questions ("should we approve this loan", "what's their credit
 picture look like"), pull together get_customer_risk_profile, get_customer_credit_score,
@@ -87,8 +87,8 @@ applied_rule_ids. Without this, a rule the applicant failed looks identical on
 the graph to one they passed, which defeats the point of showing your work.
 
 get_business_plan_details is the applicant's own account of the loan (their stated
-use of proceeds, market and repayment rationale) -- it is not Meridian's system of
-record. Note where it corroborates or conflicts with Meridian's own data (the formal
+use of proceeds, market and repayment rationale) -- it is not Nordtell's system of
+record. Note where it corroborates or conflicts with Nordtell's own data (the formal
 application, transactions, credit history); don't treat the two as interchangeable
 sources or blend them into one unsourced claim.
 
@@ -107,9 +107,9 @@ TOOLS = [
         "name": "find_customer",
         "description": (
             "Fuzzy-matches the currently shadowed business-plan people/organizations "
-            "against Meridian Bank's own customers and accounts. Creates a SIMILAR_TO "
+            "against Nordtell Bank's own customers and accounts. Creates a SIMILAR_TO "
             "link in the shadow graph for any match found and reveals the matched "
-            "Meridian node on the canvas. Call this to resolve which Meridian customer "
+            "Nordtell node on the canvas. Call this to resolve which Nordtell customer "
             "corresponds to an entity from the business plan."
         ),
         "input_schema": {"type": "object", "properties": {}},
@@ -117,7 +117,7 @@ TOOLS = [
     {
         "name": "find_parent_companies",
         "description": (
-            "Given a Meridian customerId, walks the corporate ownership hierarchy "
+            "Given a Nordtell customerId, walks the corporate ownership hierarchy "
             "outward (parent companies and any sibling companies under the same "
             "ultimate parent) and flags any related company with a delinquent loan "
             "facility. Reveals the discovered companies on the canvas."
@@ -125,7 +125,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -133,14 +133,14 @@ TOOLS = [
     {
         "name": "get_customer_risk_profile",
         "description": (
-            "Given a Meridian customerId, returns its KYC status/risk rating and any "
+            "Given a Nordtell customerId, returns its KYC status/risk rating and any "
             "loan facilities with their payment status. Use this to answer direct "
             "questions about one customer's risk profile."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -148,13 +148,13 @@ TOOLS = [
     {
         "name": "get_customer_credit_score",
         "description": (
-            "Given a Meridian customerId, returns its most recent credit score/band "
+            "Given a Nordtell customerId, returns its most recent credit score/band "
             "plus its score history over time. Use this for loan-decision questions."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -162,14 +162,14 @@ TOOLS = [
     {
         "name": "get_customer_loan_applications",
         "description": (
-            "Given a Meridian customerId, returns its loan applications (purpose, "
+            "Given a Nordtell customerId, returns its loan applications (purpose, "
             "requested amount, term, rate type, and status such as Under Review/"
             "Approved/Declined/Funded/Withdrawn). Use this for loan-decision questions."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -177,7 +177,7 @@ TOOLS = [
     {
         "name": "get_customer_transaction_summary",
         "description": (
-            "Given a Meridian customerId, summarizes transaction activity across all "
+            "Given a Nordtell customerId, summarizes transaction activity across all "
             "of its accounts: transaction count, total inflow/outflow, net cash flow, "
             "a breakdown by transaction type, and the covered date range. Use this to "
             "gauge cash-flow health for loan-decision questions."
@@ -185,7 +185,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -193,7 +193,7 @@ TOOLS = [
     {
         "name": "get_relationship_manager",
         "description": (
-            "Given a Meridian customerId, returns the relationship manager (banker) "
+            "Given a Nordtell customerId, returns the relationship manager (banker) "
             "already assigned to cover this customer, and the branch they work out "
             "of. Use this to check whether existing human coverage/context exists "
             "on this relationship before making a loan-decision recommendation."
@@ -201,7 +201,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
             },
             "required": ["customer_id"],
         },
@@ -209,7 +209,7 @@ TOOLS = [
     {
         "name": "get_lending_policy",
         "description": (
-            "Returns Meridian Bank's underwriting policy criteria for a loan product "
+            "Returns Nordtell Bank's underwriting policy criteria for a loan product "
             "type -- e.g. minimum credit score, minimum debt service coverage ratio, "
             "maximum loan-to-cash-flow, delinquency requirements -- each with a citable "
             "policy section number. Use this for loan-decision questions so the "
@@ -219,7 +219,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
                 "product_type_code": {
                     "type": "string",
                     "description": (
@@ -239,7 +239,7 @@ TOOLS = [
             "(founding date, banking history/branch) and its own stated loan "
             "request (amount, term, purpose, use of proceeds, market rationale, "
             "repayment rationale) -- the applicant's side of the story, as "
-            "opposed to Meridian's own systems. Use this for loan-decision "
+            "opposed to Nordtell's own systems. Use this for loan-decision "
             "questions to check the business's own narrative against the bank's "
             "records (credit score, transactions, the formal application on file)."
         ),
@@ -273,7 +273,7 @@ TOOLS = [
     {
         "name": "record_decision",
         "description": (
-            "Persists a finished loan recommendation to Meridian's decision "
+            "Persists a finished loan recommendation to Nordtell's decision "
             "history (the context graph). Also automatically finds every prior "
             "decision that failed the same policy rule(s) as failed_rule_ids and "
             "links this one to them as real precedent -- the result's "
@@ -284,7 +284,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "string", "description": "The Meridian customerId, e.g. 'C001'."},
+                "customer_id": {"type": "string", "description": "The Nordtell customerId, e.g. 'C001'."},
                 "product_type_code": {
                     "type": "string",
                     "description": (
@@ -445,7 +445,7 @@ def run_find_parent_companies(session, customer_id):
 
 
 TOOL_STEP_LABELS = {
-    "find_customer": "Finding matching Meridian customer",
+    "find_customer": "Finding matching Nordtell customer",
     "find_parent_companies": "Finding parent companies",
     "get_customer_risk_profile": "Pulling KYC and risk profile from virtual graph",
     "get_customer_credit_score": "Pulling credit score from virtual graph",

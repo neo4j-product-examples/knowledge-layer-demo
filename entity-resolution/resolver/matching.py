@@ -262,63 +262,130 @@ def fetch_document_properties(session):
     return [dict(r) for r in result]
 
 
-def fetch_meridian_customer_hierarchy(session):
+def fetch_meridian_customer_hierarchy_neighbors_for(session, customer_ids):
+    """Customers directly HAS_PARENT-connected (either direction) to any of
+    the given ids -- a single hop. The meridian Virtual Graph doesn't
+    support variable-length relationship patterns (`*1..n`, see this
+    module's docstring), so a multi-hop walk is done hop-by-hop in Python
+    instead (see graph_data.fetch_hierarchy_neighborhood), one of these
+    single-hop calls per layer."""
+    if not customer_ids:
+        return []
+    result = session.run(
+        """
+        USE meridianComposite.meridian
+        MATCH (c:Customer)-[:HAS_PARENT]-(other:Customer)
+        WHERE c.customerId IN $customerIds
+        RETURN DISTINCT other.customerId AS sourceId, other.customerName AS customerName
+        """,
+        customerIds=list(customer_ids),
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_meridian_customer_hierarchy_for(session, customer_ids):
     """Customer-[:HAS_PARENT]->Customer pairs (corporate ownership hierarchy,
     e.g. Rosa's Bakery -> Alvarez Family Holdings LLC -> Cedarville
-    Investment Group). Needed for WCC to surface hidden connections between
-    customers that share an ultimate parent several hops up."""
+    Investment Group), scoped to customers already on canvas. Both ends of
+    this relationship already live in meridian, so there's no need to
+    shadow-copy it into shadowDb -- it's read live, right when the canvas
+    needs to draw it."""
+    if not customer_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.meridian
         MATCH (c:Customer)-[:HAS_PARENT]->(p:Customer)
+        WHERE c.customerId IN $customerIds AND p.customerId IN $customerIds
         RETURN c.customerId AS customerId, p.customerId AS parentCustomerId
-        """
+        """,
+        customerIds=list(customer_ids),
     )
     return [dict(r) for r in result]
 
 
-def fetch_meridian_account_ownership(session):
-    """Customer-[:OWNS_ACCOUNT]->Account pairs, for shadowing the banking
-    graph's own structure alongside its identity nodes."""
+def fetch_meridian_account_ownership_for(session, customer_ids, account_ids):
+    """Customer-[:OWNS_ACCOUNT]->Account pairs, scoped to customers/accounts
+    already on canvas -- read live from meridian rather than shadow-copied,
+    since both ends already live in the same constituent."""
+    if not customer_ids or not account_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.meridian
         MATCH (c:Customer)-[:OWNS_ACCOUNT]->(a:Account)
+        WHERE c.customerId IN $customerIds AND a.accountId IN $accountIds
         RETURN c.customerId AS customerId, a.accountId AS accountId
-        """
+        """,
+        customerIds=list(customer_ids), accountIds=list(account_ids),
     )
     return [dict(r) for r in result]
 
 
-def fetch_document_worked_at(session):
+def fetch_document_worked_at_for(session, person_ids, organization_ids):
+    """Person-[:WORKED_AT]->Organization pairs, scoped to ids already on
+    canvas -- read live from documents rather than shadow-copied."""
+    if not person_ids or not organization_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.documents
         MATCH (p:Person)-[:WORKED_AT]->(o:Organization)
+        WHERE p.__id__ IN $personIds AND o.__id__ IN $organizationIds
         RETURN p.__id__ AS personId, o.__id__ AS organizationId
-        """
+        """,
+        personIds=list(person_ids), organizationIds=list(organization_ids),
     )
     return [dict(r) for r in result]
 
 
-def fetch_document_authorized_for(session):
+def fetch_document_authorized_for_for(session, person_ids, account_ids):
+    """Person-[:AUTHORIZED_FOR]->Account pairs, scoped to ids already on
+    canvas -- read live from documents rather than shadow-copied."""
+    if not person_ids or not account_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.documents
         MATCH (p:Person)-[:AUTHORIZED_FOR]->(a:Account)
+        WHERE p.__id__ IN $personIds AND a.__id__ IN $accountIds
         RETURN p.__id__ AS personId, a.__id__ AS accountId
-        """
+        """,
+        personIds=list(person_ids), accountIds=list(account_ids),
     )
     return [dict(r) for r in result]
 
 
-def fetch_document_co_owns(session):
+def fetch_document_co_owns_for(session, person_ids, property_ids):
+    """Person-[:CO_OWNS]->Property pairs, scoped to ids already on canvas --
+    read live from documents rather than shadow-copied."""
+    if not person_ids or not property_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.documents
         MATCH (p:Person)-[:CO_OWNS]->(pr:Property)
+        WHERE p.__id__ IN $personIds AND pr.__id__ IN $propertyIds
         RETURN p.__id__ AS personId, pr.__id__ AS propertyId
+        """,
+        personIds=list(person_ids), propertyIds=list(property_ids),
+    )
+    return [dict(r) for r in result]
+
+
+def fetch_document_requests_for(session, organization_ids, loan_request_ids):
+    """Organization-[:REQUESTS]->LoanRequest pairs, scoped to ids already on
+    canvas -- read live from documents rather than shadow-copied."""
+    if not organization_ids or not loan_request_ids:
+        return []
+    result = session.run(
         """
+        USE meridianComposite.documents
+        MATCH (o:Organization)-[:REQUESTS]->(lr:LoanRequest)
+        WHERE o.__id__ IN $organizationIds AND lr.__id__ IN $loanRequestIds
+        RETURN o.__id__ AS organizationId, lr.__id__ AS loanRequestId
+        """,
+        organizationIds=list(organization_ids), loanRequestIds=list(loan_request_ids),
     )
     return [dict(r) for r in result]
 
@@ -578,17 +645,20 @@ def record_decision(session, decision):
     return precedents
 
 
-def fetch_document_ownership(session):
-    """Person-[:OWNS {pct, role}]->Organization pairs (e.g. Rosa/Marcus
-    Alvarez owning Rosa's Bakery) — mirrors fetch_meridian_account_ownership
-    but for the documents graph's own ownership structure."""
+def fetch_document_ownership_for(session, person_ids, organization_ids):
+    """Person-[:OWNS]->Organization pairs (e.g. Rosa/Marcus Alvarez owning
+    Rosa's Bakery), scoped to ids already on canvas -- read live from
+    documents rather than shadow-copied."""
+    if not person_ids or not organization_ids:
+        return []
     result = session.run(
         """
         USE meridianComposite.documents
-        MATCH (p:Person)-[r:OWNS]->(o:Organization)
-        RETURN p.__id__ AS personId, o.__id__ AS organizationId,
-               r.pct AS pct, r.role AS role
-        """
+        MATCH (p:Person)-[:OWNS]->(o:Organization)
+        WHERE p.__id__ IN $personIds AND o.__id__ IN $organizationIds
+        RETURN p.__id__ AS personId, o.__id__ AS organizationId
+        """,
+        personIds=list(person_ids), organizationIds=list(organization_ids),
     )
     return [dict(r) for r in result]
 

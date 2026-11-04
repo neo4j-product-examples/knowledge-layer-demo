@@ -52,37 +52,27 @@ def get_anthropic_client():
     return _anthropic_client
 
 
-def ensure_meridian_seeded():
-    """Idempotent: seeds shadowDb with Meridian shadow nodes if missing
-    (requirements §5.1, §7.1)."""
-    with db.get_session(get_driver()) as session:
-        if not shadow_nodes.meridian_shadow_nodes_exist(session):
-            customers = matching.fetch_meridian_customers(session)
-            accounts = matching.fetch_meridian_accounts(session)
-            shadow_nodes.seed_meridian_shadow_nodes(session, customers, accounts)
-
-        # MERGE-based and cheap, so it's safe (and necessary) to re-run this
-        # even when the node seeding above was skipped as already-done.
-        ownership_edges = matching.fetch_meridian_account_ownership(session)
-        shadow_nodes.seed_meridian_account_ownership(session, ownership_edges)
-
-        hierarchy_edges = matching.fetch_meridian_customer_hierarchy(session)
-        shadow_nodes.seed_meridian_customer_hierarchy(session, hierarchy_edges)
-
-
 @app.route("/")
 def index():
+    """Never writes shadowDb's meridian-side identity nodes -- that's
+    scripts/seed_shadowdb.py's job, run once outside the app (requirements
+    §5.1). A page load that could seed on the fly is exactly how stale
+    data kept reappearing: every request would silently re-derive and
+    re-merge it, so any old copy of this code pointed at the same shared
+    database would keep writing it back. This just checks (read-only) that
+    seeding has happened, and tells the operator to run the script if not."""
     _chat_history.clear()
     try:
-        ensure_meridian_seeded()
         with db.get_session(get_driver()) as session:
+            if not shadow_nodes.meridian_shadow_nodes_exist(session):
+                raise RuntimeError("shadowDb has not been seeded yet")
             shadow_nodes.clear_document_shadow_data(session)
             matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
-        logger.exception("Failed to seed Meridian shadow nodes")
+        logger.exception("shadowDb is not ready")
         return render_template("index.html", error=(
-            "Could not reach the composite database to seed shadow nodes. "
-            "Check that the meridianComposite DBMS is running."
+            "shadowDb hasn't been seeded yet, or the composite database is unreachable. "
+            "Run `python3 scripts/seed_shadowdb.py` once, then reload."
         ), bloom_url=BLOOM_URL)
     return render_template("index.html", error=None, bloom_url=BLOOM_URL)
 
@@ -115,9 +105,11 @@ def api_ontology():
 
 @app.route("/api/upload-business-plan", methods=["POST"])
 def upload_business_plan():
-    """Shadows the documents graph's entities/relationships (already
-    extracted from the business plan into the `documents` Neo4j graph) and
-    returns just that documents-only slice for the initial canvas view."""
+    """Shadows the documents graph's entities (already extracted from the
+    business plan into the `documents` Neo4j graph) and returns just that
+    documents-only slice for the initial canvas view -- their relationships
+    to each other stay in the documents graph itself and are read live by
+    graph_data, not copied in here."""
     _chat_history.clear()
     try:
         with db.get_session(get_driver()) as session:
@@ -129,14 +121,6 @@ def upload_business_plan():
 
             shadow_nodes.seed_document_shadow_nodes(
                 session, document_persons, document_organizations, document_accounts, document_properties,
-                document_loan_requests,
-            )
-            shadow_nodes.seed_document_relationships(
-                session,
-                matching.fetch_document_worked_at(session),
-                matching.fetch_document_authorized_for(session),
-                matching.fetch_document_co_owns(session),
-                matching.fetch_document_ownership(session),
                 document_loan_requests,
             )
 

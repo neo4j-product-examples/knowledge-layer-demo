@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Meridian Lending Intelligence</title>
+  <title>Nordtell Lending Intelligence</title>
   <style>
     :root {
       --cream: #F7F0E4;
@@ -340,8 +340,8 @@
   <div id="landing">
     <div class="landing-blob"></div>
     <div class="landing-card">
-      <h1>Meridian Lending Intelligence</h1>
-      <p>AI-assisted loan decisioning for Meridian Bank commercial lending. Upload a business plan to begin underwriting review.</p>
+      <h1>Nordtell Lending Intelligence</h1>
+      <p>AI-assisted loan decisioning for Nordtell Bank commercial lending. Upload a business plan to begin underwriting review.</p>
       <button id="upload-btn">Upload Business Plan</button>
     </div>
   </div>
@@ -349,9 +349,9 @@
   <div id="workspace">
     <div id="topbar">
       <div id="topbar-brand">
-        <div id="topbar-mark">M</div>
+        <div id="topbar-mark">N</div>
         <div>
-          <div id="topbar-title">Meridian Lending Intelligence</div>
+          <div id="topbar-title">Nordtell Lending Intelligence</div>
           <div id="topbar-subtitle">Commercial Loan Decisioning</div>
         </div>
       </div>
@@ -515,6 +515,13 @@
     // adding a node reads as "a node was added" rather than the whole graph
     // reshuffling.
     const nodePositions = new Map();
+    // How many children have already been fanned out around each hub node
+    // (see the golden-angle seeding in layoutNodes below) -- persists
+    // across calls, same as nodePositions, so a hub's second batch of
+    // children (e.g. a customer's credit score arriving in a later tool
+    // call than its KYC status) continues the spiral instead of
+    // restarting it and overlapping the first batch.
+    const hubChildCount = new Map();
     // The color NVL was last told about for each node id. A node already on
     // screen (already in nodePositions) is normally left out of the payload
     // sent to NVL entirely -- but if its color in graphNodesById has since
@@ -524,23 +531,109 @@
     // stays whatever color it was first painted forever.
     const nodeColorsById = new Map();
 
+    // A node's constituent decides its "home column" -- left to right,
+    // documents (the business plan) -> meridian (the bank's own data) ->
+    // lendingpolicy -> context (decisions/precedent). documents sits at
+    // x=0 deliberately: that's where NVL's camera starts (initialZoom: 1,
+    // no pan) before the first fit() call ever runs, and it's also the
+    // very first thing on screen (uploading the business plan, before any
+    // chat tool has run) -- so it's framed correctly from the first
+    // paint, with every later constituent's column extending to its
+    // right as the conversation reveals them, rather than needing fit()
+    // to immediately re-center a cluster that was seeded off to one side.
+    //
+    // This is only a tie-breaker, not the real positioning logic (see
+    // HOME_COLUMN_STRENGTH below, deliberately weak) -- two nodes that
+    // are actually connected (e.g. documents' "Organization: Rosa's
+    // Bakery" and meridian's "Customer: C001", bridged by a name_fuzzy
+    // match) should sit close together because the edge spring pulls
+    // them there, the same as any other real relationship, not because
+    // either one was dragged to a fixed point on the canvas. The home
+    // column only matters for nodes with nothing else pulling on them,
+    // keeping the overall reading order left-to-right without forcing
+    // every column to the same rigid width regardless of how connected
+    // its contents actually are.
+    const GROUP_HOME_X = { documents: 0, meridian: 350, policy: 700, context: 1050 };
+
+    // NVL's own fit() doesn't reliably recompute the camera once the
+    // graph has grown wide (confirmed live: getNodePositions() correctly
+    // reports the full bounding box, but fit() leaves scale/pan
+    // unchanged) -- so the camera is framed here instead, directly from
+    // the positions this file already tracks, via setZoomAndPan (which
+    // does work correctly). Centers on the bounding box of every node on
+    // screen and zooms to fit it with some breathing room, capped so a
+    // single small cluster (e.g. just the business plan, right after
+    // upload) doesn't get zoomed in absurdly close.
+    function fitToContent() {
+      if (!nvl || !nodePositions.size) return;
+      const positions = Array.from(nodePositions.values());
+      const minX = Math.min(...positions.map(p => p.x));
+      const maxX = Math.max(...positions.map(p => p.x));
+      const minY = Math.min(...positions.map(p => p.y));
+      const maxY = Math.max(...positions.map(p => p.y));
+      const PADDING = 120; // node radius + label breathing room
+      const contentWidth = Math.max(maxX - minX, 1) + PADDING * 2;
+      const contentHeight = Math.max(maxY - minY, 1) + PADDING * 2;
+      const rect = graphContainer.getBoundingClientRect();
+      const scale = Math.min(rect.width / contentWidth, rect.height / contentHeight, 1.5);
+      nvl.setZoomAndPan(scale, (minX + maxX) / 2, -(minY + maxY) / 2);
+    }
+
+    // Evenly spreads points added one at a time around a center without
+    // ever needing to know the eventual total (the same angle a
+    // sunflower uses between successive seeds) -- so a hub's children
+    // read as spokes fanning out from it, arriving over however many
+    // separate tool calls, rather than a scattered cluster that only
+    // looks organized when everything happens to land in one batch.
+    const GOLDEN_ANGLE = 2.399963229728653;
+    const FAN_RADIUS = 170;
+
     function layoutNodes(nodes, edges) {
+      const groupById = new Map(nodes.map(n => [n.id, n.group]));
       const newNodeIds = new Set();
       for (const node of nodes) {
         if (nodePositions.has(node.id)) continue;
         newNodeIds.add(node.id);
-        const neighborPositions = edges
+        const homeX = GROUP_HOME_X[node.group] ?? 0;
+        const neighbors = edges
           .filter(e => e.from === node.id || e.to === node.id)
-          .map(e => nodePositions.get(e.from === node.id ? e.to : e.from))
-          .filter(Boolean);
-        if (neighborPositions.length) {
-          const avg = neighborPositions.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+          .map(e => e.from === node.id ? e.to : e.from)
+          .filter(id => nodePositions.has(id));
+        // Fanning is only for a hub and its own constituent's children
+        // (e.g. a customer and its credit score) -- a cross-constituent
+        // bridge (e.g. a brand-new meridian customer whose only neighbor
+        // so far is the documents org it was matched to) must still go to
+        // its own home column, or the very first node of a constituent
+        // orbits the wrong one and drags its whole column out of order.
+        const sameGroupNeighbors = neighbors.filter(id => groupById.get(id) === node.group);
+        if (sameGroupNeighbors.length === 1) {
+          // Exactly one already-placed neighbor in the same constituent --
+          // a clear hub-and-spoke relationship (e.g. a customer's credit
+          // score, a policy section's rule). Fan out around it instead of
+          // a random jitter.
+          const hubId = sameGroupNeighbors[0];
+          const hubPos = nodePositions.get(hubId);
+          const index = hubChildCount.get(hubId) || 0;
+          hubChildCount.set(hubId, index + 1);
+          const angle = index * GOLDEN_ANGLE;
           nodePositions.set(node.id, {
-            x: avg.x / neighborPositions.length + (Math.random() * 60 - 30),
-            y: avg.y / neighborPositions.length + (Math.random() * 60 - 30),
+            x: hubPos.x + FAN_RADIUS * Math.cos(angle),
+            y: hubPos.y + FAN_RADIUS * Math.sin(angle),
+          });
+        } else if (neighbors.length >= 1) {
+          // Either a cross-constituent bridge (its one neighbor is in a
+          // different group -- e.g. a brand-new meridian customer matched
+          // to a documents org) or an ambiguous multi-parent node: either
+          // way, home column decides x, and the neighbor(s) only nudge y
+          // so it doesn't land disconnected-looking far from them.
+          const neighborPositions = neighbors.map(id => nodePositions.get(id));
+          const avgY = neighborPositions.reduce((acc, p) => acc + p.y, 0) / neighborPositions.length;
+          nodePositions.set(node.id, {
+            x: homeX + (Math.random() * 60 - 30),
+            y: avgY + (Math.random() * 60 - 30),
           });
         } else {
-          nodePositions.set(node.id, { x: Math.random() * 100 - 50, y: Math.random() * 100 - 50 });
+          nodePositions.set(node.id, { x: homeX + (Math.random() * 100 - 50), y: Math.random() * 100 - 50 });
         }
       }
       if (!newNodeIds.size) return nodePositions;
@@ -551,6 +644,15 @@
       const SPRING_LENGTH = 150;
       const SPRING_STRENGTH = 0.02;
       const DAMPING = 0.85;
+      // Deliberately much weaker than SPRING_STRENGTH (edges) -- this is
+      // only a tie-breaker for nodes with no other pull on their position,
+      // not a competitor to real relationships. A directly-connected pair
+      // across constituents (e.g. a documents<->meridian name_fuzzy match)
+      // should settle close together because the spring pulls them there,
+      // same as any other edge; stronger than this and the home column
+      // would stretch that connection out to a fixed distance regardless
+      // of how tightly the two sides actually relate.
+      const HOME_COLUMN_STRENGTH = 0.0025;
 
       for (let iter = 0; iter < 300; iter++) {
         for (let i = 0; i < nodes.length; i++) {
@@ -577,6 +679,13 @@
           const va = velocities.get(e.from), vb = velocities.get(e.to);
           va.vx += fx; va.vy += fy;
           vb.vx -= fx; vb.vy -= fy;
+        }
+        for (const node of nodes) {
+          if (!newNodeIds.has(node.id)) continue;
+          const pos = nodePositions.get(node.id);
+          const vel = velocities.get(node.id);
+          const homeX = GROUP_HOME_X[node.group];
+          if (homeX !== undefined) vel.vx += (homeX - pos.x) * HOME_COLUMN_STRENGTH;
         }
         for (const node of nodes) {
           if (!newNodeIds.has(node.id)) continue; // existing nodes stay put
@@ -657,7 +766,7 @@
         // that redraw immediately.
         nvl.setNodePositions(nodes.map(n => ({ id: n.id, x: n.x, y: n.y })));
         for (const n of nodeList) nodeColorsById.set(n.id, n.color);
-        requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+        requestAnimationFrame(() => requestAnimationFrame(() => fitToContent()));
         return;
       }
 
@@ -707,7 +816,7 @@
         if (frame < FRAMES) await new Promise(resolve => setTimeout(resolve, 35));
       }
       if (myGeneration !== renderGeneration) return;
-      requestAnimationFrame(() => requestAnimationFrame(() => nvl?.fit()));
+      requestAnimationFrame(() => requestAnimationFrame(() => fitToContent()));
     }
 
     function addMessage(role, text) {
@@ -778,7 +887,7 @@
         const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
         enableChat();
-        addSuggestion("Should we approve the $400,000 term loan for Rosa's Bakery? Check it against Meridian's lending policy.");
+        addSuggestion("Should we approve the $400,000 term loan for Rosa's Bakery? Check it against Nordtell's lending policy.");
       } catch (e) {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Business Plan';
