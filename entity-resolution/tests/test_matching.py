@@ -95,25 +95,6 @@ def test_fetch_document_persons_uses_documents_constituent(fake_session):
     assert "coalesce(p.name, p.fullName)" in query
 
 
-def test_fetch_meridian_account_ownership_for_uses_meridian_constituent(fake_session):
-    fake_session.when("OWNS_ACCOUNT", [{"customerId": "C1", "accountId": "A1"}])
-
-    rows = matching.fetch_meridian_account_ownership_for(fake_session, ["C1"], ["A1"])
-
-    assert rows == [{"customerId": "C1", "accountId": "A1"}]
-    query, params = fake_session.calls[0]
-    assert "USE meridianComposite.meridian" in query
-    assert "OWNS_ACCOUNT" in query
-    assert params["customerIds"] == ["C1"]
-    assert params["accountIds"] == ["A1"]
-
-
-def test_fetch_meridian_account_ownership_for_skips_query_with_no_ids(fake_session):
-    assert matching.fetch_meridian_account_ownership_for(fake_session, [], ["A1"]) == []
-    assert matching.fetch_meridian_account_ownership_for(fake_session, ["C1"], []) == []
-    assert fake_session.calls == []
-
-
 def test_fetch_document_loan_requests_uses_documents_constituent(fake_session):
     fake_session.when(
         "MATCH (o:Organization)-[:REQUESTS]->(lr:LoanRequest)",
@@ -158,22 +139,6 @@ def test_fetch_document_worked_at_for(fake_session):
 def test_fetch_document_worked_at_for_skips_query_with_no_ids(fake_session):
     assert matching.fetch_document_worked_at_for(fake_session, [], ["o1"]) == []
     assert fake_session.calls == []
-
-
-def test_fetch_document_authorized_for_for(fake_session):
-    fake_session.when("AUTHORIZED_FOR", [{"personId": "p1", "accountId": "a1"}])
-
-    rows = matching.fetch_document_authorized_for_for(fake_session, ["p1"], ["a1"])
-
-    assert rows == [{"personId": "p1", "accountId": "a1"}]
-
-
-def test_fetch_document_co_owns_for(fake_session):
-    fake_session.when("CO_OWNS", [{"personId": "p1", "propertyId": "pr1"}])
-
-    rows = matching.fetch_document_co_owns_for(fake_session, ["p1"], ["pr1"])
-
-    assert rows == [{"personId": "p1", "propertyId": "pr1"}]
 
 
 def test_fetch_meridian_customer_hierarchy_neighbors_for_uses_meridian_constituent(fake_session):

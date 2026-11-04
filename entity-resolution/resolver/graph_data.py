@@ -644,27 +644,23 @@ def _fetch_live_structural_edges(session, node_rows):
     to whichever nodes are already shadowed -- every one of them already
     lives entirely inside one constituent, so none of them ever actually
     needed shadowing; only SIMILAR_TO (a genuine cross-constituent link)
-    does."""
+    does.
+
+    OWNS_ACCOUNT/AUTHORIZED_FOR/CO_OWNS used to be read here too, but
+    Account/Property are no longer shadowed at all (never matched with
+    this demo's data -- see the Account/Property-matching-removal commit),
+    so those edges could never be scoped to anything on canvas."""
     ids = _ids_by_source_and_label(node_rows)
     customer_ids = ids.get(("meridian", "Customer"), [])
-    account_ids = ids.get(("meridian", "Account"), [])
     person_ids = ids.get(("documents", "Person"), [])
     org_ids = ids.get(("documents", "Organization"), [])
-    doc_account_ids = ids.get(("documents", "Account"), [])
-    property_ids = ids.get(("documents", "Property"), [])
     loan_request_ids = ids.get(("documents", "LoanRequest"), [])
 
     edges = []
-    for row in matching.fetch_meridian_account_ownership_for(session, customer_ids, account_ids):
-        edges.append(("meridian", row["customerId"], "meridian", row["accountId"], "OWNS_ACCOUNT"))
     for row in matching.fetch_meridian_customer_hierarchy_for(session, customer_ids):
         edges.append(("meridian", row["customerId"], "meridian", row["parentCustomerId"], "HAS_PARENT"))
     for row in matching.fetch_document_worked_at_for(session, person_ids, org_ids):
         edges.append(("documents", row["personId"], "documents", row["organizationId"], "WORKED_AT"))
-    for row in matching.fetch_document_authorized_for_for(session, person_ids, doc_account_ids):
-        edges.append(("documents", row["personId"], "documents", row["accountId"], "AUTHORIZED_FOR"))
-    for row in matching.fetch_document_co_owns_for(session, person_ids, property_ids):
-        edges.append(("documents", row["personId"], "documents", row["propertyId"], "CO_OWNS"))
     for row in matching.fetch_document_ownership_for(session, person_ids, org_ids):
         edges.append(("documents", row["personId"], "documents", row["organizationId"], "OWNS"))
     for row in matching.fetch_document_requests_for(session, org_ids, loan_request_ids):

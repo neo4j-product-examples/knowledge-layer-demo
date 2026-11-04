@@ -504,18 +504,18 @@ def test_fetch_graph_json_merges_similar_to_with_a_live_structural_edge(fake_ses
         "MATCH (n:Shadow)\nRETURN",
         [
             {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"], "name": "Rosa's Bakery"},
-            {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"], "name": None},
+            {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"], "name": "Alvarez Holdings"},
         ],
     )
     fake_session.when("[r:SIMILAR_TO]", [])
-    fake_session.when("OWNS_ACCOUNT", [{"customerId": "C1", "accountId": "A1"}])
+    fake_session.when("HAS_PARENT", [{"customerId": "C1", "parentCustomerId": "C2"}])
 
     graph = graph_data.fetch_graph_json(fake_session)
 
-    assert {n["id"] for n in graph["nodes"]} == {"meridian:C1", "meridian:A1"}
+    assert {n["id"] for n in graph["nodes"]} == {"meridian:C1", "meridian:C2"}
     assert graph["edges"] == [{
-        "from": "meridian:C1", "to": "meridian:A1",
-        "label": "OWNS_ACCOUNT", "title": "OWNS_ACCOUNT", "dashes": False,
+        "from": "meridian:C1", "to": "meridian:C2",
+        "label": "HAS_PARENT", "title": "HAS_PARENT", "dashes": False,
     }]
 
 
