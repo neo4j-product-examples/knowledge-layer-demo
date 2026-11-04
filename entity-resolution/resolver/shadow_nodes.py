@@ -104,19 +104,14 @@ def seed_meridian_customers(session, customers):
     _merge_shadow_nodes_batch(session, "Customer", "meridian", rows)
 
 
-def seed_meridian_accounts(session, accounts):
-    rows = [
-        {"sourceId": a["accountId"], "properties": {}}
-        for a in accounts
-        if a.get("accountId") is not None
-    ]
-    _merge_shadow_nodes_batch(session, "Account", "meridian", rows)
+def seed_meridian_shadow_nodes(session, customers):
+    """Idempotent: safe to call on every app startup.
 
-
-def seed_meridian_shadow_nodes(session, customers, accounts):
-    """Idempotent: safe to call on every app startup."""
+    Only Customer is shadowed -- meridian's Account entities were shadowed
+    too at one point, but documents never actually has Account nodes in
+    this demo's data, so account matching never produced anything; see the
+    shadowdb-simplification commits."""
     seed_meridian_customers(session, customers)
-    seed_meridian_accounts(session, accounts)
 
 
 def create_document_shadow_node(session, label, source_id, properties):
@@ -129,11 +124,15 @@ def create_document_shadow_node(session, label, source_id, properties):
     )
 
 
-def seed_document_shadow_nodes(session, persons, organizations, accounts, properties, loan_requests=None):
-    """Shadows every Person/Organization/Account/Property/LoanRequest node
-    from the documents graph, run when a document is uploaded (not on
-    startup) -- identity only (just a display name), never the fuller
-    record that stays in the documents graph itself."""
+def seed_document_shadow_nodes(session, persons, organizations, loan_requests=None):
+    """Shadows every Person/Organization/LoanRequest node from the documents
+    graph, run when a document is uploaded (not on startup) -- identity
+    only (just a display name), never the fuller record that stays in the
+    documents graph itself.
+
+    Account and Property were shadowed here too at one point, but this
+    demo's documents data never actually has Account/Property nodes, so
+    those were always empty; see the shadowdb-simplification commits."""
     person_rows = [
         {"sourceId": p["__id__"], "properties": {"name": p.get("name")}}
         for p in persons if p.get("__id__") is not None
@@ -145,18 +144,6 @@ def seed_document_shadow_nodes(session, persons, organizations, accounts, proper
         for o in organizations if o.get("__id__") is not None
     ]
     _merge_shadow_nodes_batch(session, "Organization", "documents", org_rows)
-
-    account_rows = [
-        {"sourceId": a["__id__"], "properties": {}}
-        for a in accounts if a.get("__id__") is not None
-    ]
-    _merge_shadow_nodes_batch(session, "Account", "documents", account_rows)
-
-    property_rows = [
-        {"sourceId": pr["__id__"], "properties": {"name": pr.get("name")}}
-        for pr in properties if pr.get("__id__") is not None
-    ]
-    _merge_shadow_nodes_batch(session, "Property", "documents", property_rows)
 
     loan_request_rows = [
         {

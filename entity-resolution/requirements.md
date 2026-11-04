@@ -6,15 +6,14 @@ A Flask web app that resolves entities between two Neo4j graphs — `meridian`
 (structured banking data, exposed as a read-only Aura Virtual Graph) and
 `documents` (a document-intelligence knowledge graph built from unstructured
 documents) — using a Neo4j composite database (`meridianComposite`) as the
-query layer, and Weakly Connected Components (WCC) as the resolution
-algorithm.
+query layer.
 
 Composite database constituents (already provisioned):
 
 - `meridianComposite.meridian` → Aura Virtual Graph, **read-only**
 - `meridianComposite.documents` → Aura standard DB, read/write
 - `meridianComposite.shadowDb` → Aura standard DB, read/write, dedicated to
-  resolution output (shadow nodes, `SIMILAR_TO` edges, WCC results)
+  resolution output (shadow nodes, `SIMILAR_TO` edges)
 
 ## 2. Why a shadow-node pattern
 
@@ -32,21 +31,18 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
 | Source | Label | Key identifying properties |
 |---|---|---|
 | meridian | `Customer` | `customerId`, `customerName`, `ein`, `customerType` |
-| meridian | `Account` | `accountId` |
 | documents | `Person` | `customerID`, `name` |
 | documents | `Organization` | `name` |
-| documents | `Account` | `accountID`, `accountNumber` |
+
+`meridian.Account`/`documents.Account` (exact-id account matching) and
+`documents.Property` were in scope at one point, but this demo's
+`documents` data never actually has `Account`/`Property` nodes, so that
+matching rule and those shadow copies never produced anything — removed
+rather than kept as permanently-dead capability.
 
 ## 4. Matching rules (per entity-type pair)
 
-### 4.1 Account ↔ Account
-- **Signal:** exact match, case-insensitive, on normalized identifier
-  (strip whitespace/dashes/leading zeros).
-- Compare `meridian.Account.accountId` against `documents.Account.accountID`
-  **or** `documents.Account.accountNumber`.
-- This is the highest-confidence match type — treat as ground truth.
-
-### 4.2 Customer ↔ Person
+### 4.1 Customer ↔ Person
 - **Priority 1 (exact):** `meridian.Customer.customerId` ==
   `documents.Person.customerID`, when the `documents.Person` node has a
   non-null `customerID`.
@@ -55,7 +51,7 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
   strip punctuation/whitespace) using token-set similarity, only applied
   when `customerType` indicates an individual. Match if similarity ≥ 0.85.
 
-### 4.3 Customer ↔ Organization
+### 4.2 Customer ↔ Organization
 - **Signal (fuzzy only — no shared key exists in the schema):** normalized
   name similarity between `meridian.Customer.customerName` and
   `documents.Organization.name`, applied when `customerType` indicates a
@@ -63,9 +59,9 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
   (`inc`, `llc`, `corp`, `co`, `ltd`, punctuation). Match if similarity ≥
   0.85.
 
-### 4.4 Confidence labeling
+### 4.3 Confidence labeling
 Every `SIMILAR_TO` edge must carry:
-- `matchType`: `"account_exact"` | `"customer_exact"` | `"name_fuzzy"`
+- `matchType`: `"customer_exact"` | `"name_fuzzy"`
 - `confidence`: float 0–1 (1.0 for exact matches, similarity score for
   fuzzy matches)
 - `matchedOn`: the property name(s) used
@@ -74,13 +70,12 @@ Every `SIMILAR_TO` edge must carry:
 
 ### 5.1 Nordtell seeding (run once, outside the app, independent of any document)
 Run via `scripts/seed_shadowdb.py` by hand -- once, or whenever meridian's
-customer/account list changes -- never from the Flask app itself:
-- For every `meridian.Customer` and `meridian.Account`, `MERGE` a shadow
-  node in `shadowDb` labeled `:Shadow:<OriginalLabel>`, with
-  `sourceGraph: "meridian"`, `sourceId` set to the original key
-  (`customerId` / `accountId`), and just enough to display it (`name`) --
-  not a copy of the full record, which stays in `meridian` and is read
-  live when needed (see §2).
+customer list changes -- never from the Flask app itself:
+- For every `meridian.Customer`, `MERGE` a shadow node in `shadowDb`
+  labeled `:Shadow:Customer`, with `sourceGraph: "meridian"`, `sourceId`
+  set to `customerId`, and just enough to display it (`name`) -- not a
+  copy of the full record, which stays in `meridian` and is read live
+  when needed (see §2).
 - `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to
   re-run without creating duplicates.
 - The app (`index()`) only ever reads this seeding's result (a check that
@@ -97,7 +92,7 @@ nodes (§4):
    `:Shadow:<OriginalLabel>` with `sourceGraph: "documents"` and `sourceId`
    set to the original key, copying identifying properties.
 2. Connect it to the existing Nordtell shadow node (from §5.1) with
-   `SIMILAR_TO` (properties per §4.4).
+   `SIMILAR_TO` (properties per §4.3).
 3. Idempotency requirement: re-running the pipeline on the same source data
    must not create duplicate shadow nodes or edges (`MERGE` on
    `(sourceGraph, sourceId)` for nodes, and on the node pair for edges).

@@ -115,13 +115,10 @@ def upload_business_plan():
         with db.get_session(get_driver()) as session:
             document_persons = matching.fetch_document_persons(session)
             document_organizations = matching.fetch_document_organizations(session)
-            document_accounts = matching.fetch_document_accounts(session)
-            document_properties = matching.fetch_document_properties(session)
             document_loan_requests = matching.fetch_document_loan_requests(session)
 
             shadow_nodes.seed_document_shadow_nodes(
-                session, document_persons, document_organizations, document_accounts, document_properties,
-                document_loan_requests,
+                session, document_persons, document_organizations, document_loan_requests,
             )
 
             graph = graph_data.fetch_documents_graph_json(session)
@@ -130,8 +127,6 @@ def upload_business_plan():
             "status": "ok",
             "personCount": len(document_persons),
             "organizationCount": len(document_organizations),
-            "accountCount": len(document_accounts),
-            "propertyCount": len(document_properties),
             "graph": graph,
         })
     except Exception:
@@ -142,7 +137,7 @@ def upload_business_plan():
 @app.route("/api/find-customer", methods=["POST"])
 def find_customer():
     """Fuzzy-matches the shadowed documents entities against meridian
-    Customers/Accounts and shadows any matches found as SIMILAR_TO edges."""
+    Customers and shadows any matches found as SIMILAR_TO edges."""
     try:
         with db.get_session(get_driver()) as session:
             result = chat_tools.run_find_customer(session)

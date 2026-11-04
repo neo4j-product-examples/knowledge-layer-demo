@@ -33,37 +33,6 @@ def test_name_similarity_dissimilar_names_is_low():
     assert matching.name_similarity("acme corp", "totally different") < 0.5
 
 
-def test_match_accounts_exact_on_account_id():
-    meridian_accounts = [{"accountId": "ACC-001"}]
-    document_accounts = [{"__id__": "doc1", "accountID": "acc001", "accountNumber": None}]
-
-    matches = matching.match_accounts(meridian_accounts, document_accounts)
-
-    assert len(matches) == 1
-    assert matches[0]["meridian_id"] == "ACC-001"
-    assert matches[0]["documents_id"] == "doc1"
-    assert matches[0]["matchType"] == "account_exact"
-    assert matches[0]["confidence"] == 1.0
-    assert matches[0]["matchedOn"] == "accountID"
-
-
-def test_match_accounts_falls_back_to_account_number():
-    meridian_accounts = [{"accountId": "ACC-002"}]
-    document_accounts = [{"__id__": "doc2", "accountID": None, "accountNumber": "acc-002"}]
-
-    matches = matching.match_accounts(meridian_accounts, document_accounts)
-
-    assert len(matches) == 1
-    assert matches[0]["matchedOn"] == "accountNumber"
-
-
-def test_match_accounts_no_match():
-    meridian_accounts = [{"accountId": "ACC-003"}]
-    document_accounts = [{"__id__": "doc3", "accountID": "different", "accountNumber": "also-different"}]
-
-    assert matching.match_accounts(meridian_accounts, document_accounts) == []
-
-
 def test_match_customers_exact_on_customer_id():
     customers = [{"customerId": "CUST-1", "customerName": "Jane Doe", "customerType": "Individual"}]
     persons = [{"__id__": "p1", "customerID": "cust-1", "name": "Someone Else"}]
@@ -174,16 +143,6 @@ def test_fetch_document_business_plan_uses_documents_constituent(fake_session):
 
     assert rows[0]["name"] == "Rosa's Bakery"
     assert rows[0]["requestedAmount"] == 400000
-    query, _ = fake_session.calls[0]
-    assert "USE meridianComposite.documents" in query
-
-
-def test_fetch_document_properties_uses_documents_constituent(fake_session):
-    fake_session.when("MATCH (p:Property)", [{"__id__": "pr1", "name": "123 Main St"}])
-
-    rows = matching.fetch_document_properties(fake_session)
-
-    assert rows == [{"__id__": "pr1", "name": "123 Main St"}]
     query, _ = fake_session.calls[0]
     assert "USE meridianComposite.documents" in query
 

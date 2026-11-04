@@ -119,22 +119,20 @@ def test_fetch_hierarchy_edges_passes_id_list(fake_session):
     assert set(params["ids"]) == {"C001", "C082"}
 
 
-def test_build_match_delta_labels_customer_and_account_matches():
+def test_build_match_delta_labels_customer_matches():
     matches = [
         {"meridian_id": "C001", "documents_id": "o1", "matchType": "name_fuzzy", "confidence": 1.0},
-        {"meridian_id": "A00001", "documents_id": "a1", "matchType": "account_exact", "confidence": 1.0},
     ]
     meridian_customer_by_id = {"C001": {"customerName": "Rosas Bakery"}}
-    meridian_account_by_id = {"A00001": {"accountId": "A00001"}}
 
-    delta = graph_data.build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id)
+    delta = graph_data.build_match_delta(matches, meridian_customer_by_id)
 
-    assert len(delta["nodes"]) == 2
-    assert len(delta["edges"]) == 2
+    assert len(delta["nodes"]) == 1
+    assert len(delta["edges"]) == 1
     labels = {n["id"]: n["label"] for n in delta["nodes"]}
     assert labels["meridian:C001"] == "Customer: Rosas Bakery"
-    assert labels["meridian:A00001"] == "Account: A00001"
-    edge = next(e for e in delta["edges"] if e["from"] == "meridian:C001")
+    edge = delta["edges"][0]
+    assert edge["from"] == "meridian:C001"
     assert edge["to"] == "documents:o1"
     assert edge["dashes"] is True
 

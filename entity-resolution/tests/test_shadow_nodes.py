@@ -30,13 +30,12 @@ def test_seed_meridian_customers_skips_missing_id(fake_session):
     assert fake_session.calls == []
 
 
-def test_seed_meridian_accounts_merges_shadow_account(fake_session):
-    shadow_nodes.seed_meridian_accounts(fake_session, [{"accountId": "A1"}])
+def test_seed_meridian_shadow_nodes_only_seeds_customers(fake_session):
+    shadow_nodes.seed_meridian_shadow_nodes(fake_session, [{"customerId": "C1", "customerName": "Jane Doe"}])
 
-    query, params = fake_session.calls[0]
-    assert "MERGE (n:Shadow:Account" in query
-    assert params["sourceGraph"] == "meridian"
-    assert params["rows"] == [{"sourceId": "A1", "properties": {}}]
+    assert len(fake_session.calls) == 1
+    query, _ = fake_session.calls[0]
+    assert "MERGE (n:Shadow:Customer" in query
 
 
 def test_create_document_shadow_node(fake_session):
@@ -81,17 +80,13 @@ def test_clear_document_shadow_data_deletes_documents_shadow_nodes(fake_session)
 def test_seed_document_shadow_nodes_creates_one_call_per_entity(fake_session):
     persons = [{"__id__": "p1", "customerID": None, "name": "Jane"}]
     organizations = [{"__id__": "o1", "name": "Acme"}]
-    accounts = [{"__id__": "a1", "accountID": "1", "accountNumber": None}]
-    properties = [{"__id__": "pr1", "name": "123 Main St"}]
 
-    shadow_nodes.seed_document_shadow_nodes(fake_session, persons, organizations, accounts, properties)
+    shadow_nodes.seed_document_shadow_nodes(fake_session, persons, organizations)
 
-    assert len(fake_session.calls) == 4
+    assert len(fake_session.calls) == 2
     labels = [q for q, _ in fake_session.calls]
     assert any("MERGE (n:Shadow:Person" in q for q in labels)
     assert any("MERGE (n:Shadow:Organization" in q for q in labels)
-    assert any("MERGE (n:Shadow:Account" in q for q in labels)
-    assert any("MERGE (n:Shadow:Property" in q for q in labels)
 
 
 def test_seed_document_shadow_nodes_skips_missing_ids(fake_session):
@@ -99,27 +94,24 @@ def test_seed_document_shadow_nodes_skips_missing_ids(fake_session):
         fake_session,
         persons=[{"__id__": None, "name": "Jane"}],
         organizations=[],
-        accounts=[],
-        properties=[],
     )
     assert fake_session.calls == []
 
 
 def test_seed_document_shadow_nodes_keeps_only_identity_properties(fake_session):
     persons = [{"__id__": "p1", "customerID": "CUST-1", "name": "Jane"}]
-    accounts = [{"__id__": "a1", "accountID": "1", "accountNumber": "0001"}]
 
-    shadow_nodes.seed_document_shadow_nodes(fake_session, persons, [], accounts, [])
+    shadow_nodes.seed_document_shadow_nodes(fake_session, persons, [])
 
-    calls_by_label = {q.split("Shadow:")[1].split(" ")[0]: params for q, params in fake_session.calls}
-    assert calls_by_label["Person"]["rows"][0]["properties"] == {"name": "Jane"}
-    assert calls_by_label["Account"]["rows"][0]["properties"] == {}
+    query, params = fake_session.calls[0]
+    assert "MERGE (n:Shadow:Person" in query
+    assert params["rows"][0]["properties"] == {"name": "Jane"}
 
 
 def test_seed_document_shadow_nodes_seeds_loan_request_with_readable_name(fake_session):
     shadow_nodes.seed_document_shadow_nodes(
         fake_session,
-        persons=[], organizations=[], accounts=[], properties=[],
+        persons=[], organizations=[],
         loan_requests=[{
             "__id__": "lr1", "requestedAmount": 400000, "termYears": 10,
             "rateType": "Fixed", "applicationId": "APP-3001", "purpose": "Expansion",

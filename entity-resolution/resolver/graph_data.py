@@ -106,7 +106,7 @@ def build_vis_graph(node_rows, edge_rows):
     return {"nodes": list(nodes.values()), "edges": edges}
 
 
-def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
+def build_match_delta(matches, meridian_customer_by_id):
     """Graph delta revealing the meridian side of each match (the documents
     side is assumed already on the canvas from the documents-only view)."""
     nodes = {}
@@ -116,8 +116,6 @@ def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
         nid = _node_id("meridian", meridian_id)
         if meridian_id in meridian_customer_by_id:
             label = f"Customer: {meridian_customer_by_id[meridian_id].get('customerName')}"
-        elif meridian_id in meridian_account_by_id:
-            label = f"Account: {meridian_id}"
         else:
             label = meridian_id
         nodes[nid] = {

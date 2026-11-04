@@ -372,42 +372,39 @@ TOOLS = [
 
 
 def run_find_customer(session):
+    # Account matching (match_accounts) was removed -- the documents graph
+    # never actually has Account nodes in this demo's data, so it never
+    # produced a match; see matching.py's module docstring history / the
+    # shadowdb-simplification commits for why.
     meridian_customers = matching.fetch_meridian_customers(session)
-    meridian_accounts = matching.fetch_meridian_accounts(session)
     document_persons = matching.fetch_document_persons(session)
     document_organizations = matching.fetch_document_organizations(session)
-    document_accounts = matching.fetch_document_accounts(session)
 
     customer_matches = matching.match_customers(meridian_customers, document_persons, document_organizations)
-    account_matches = matching.match_accounts(meridian_accounts, document_accounts)
 
     person_lookup = {p["__id__"]: p for p in document_persons}
     org_lookup = {o["__id__"]: o for o in document_organizations}
-    account_lookup = {a["__id__"]: a for a in document_accounts}
 
     person_matches = [m for m in customer_matches if m["documents_id"] in person_lookup]
     org_matches = [m for m in customer_matches if m["documents_id"] in org_lookup]
 
     shadow_nodes.apply_document_matches(session, person_matches, "Person", person_lookup)
     shadow_nodes.apply_document_matches(session, org_matches, "Organization", org_lookup)
-    shadow_nodes.apply_document_matches(session, account_matches, "Account", account_lookup)
 
     meridian_customer_by_id = {c["customerId"]: c for c in meridian_customers}
-    meridian_account_by_id = {a["accountId"]: a for a in meridian_accounts}
 
-    all_matches = customer_matches + account_matches
-    delta = graph_data.build_match_delta(all_matches, meridian_customer_by_id, meridian_account_by_id)
+    delta = graph_data.build_match_delta(customer_matches, meridian_customer_by_id)
 
     matches_payload = [
         {
             "meridianId": m["meridian_id"],
             "meridianName": meridian_customer_by_id.get(m["meridian_id"], {}).get("customerName")
             or m["meridian_id"],
-            "kind": "customer" if m["meridian_id"] in meridian_customer_by_id else "account",
+            "kind": "customer",
             "matchType": m["matchType"],
             "confidence": m["confidence"],
         }
-        for m in all_matches
+        for m in customer_matches
     ]
     return {"matches": matches_payload, "graph": delta}
 

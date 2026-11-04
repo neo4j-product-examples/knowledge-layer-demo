@@ -62,35 +62,6 @@ def is_business(customer_type):
     return any(keyword in lowered for keyword in _BUSINESS_KEYWORDS)
 
 
-def match_accounts(meridian_accounts, document_accounts):
-    """Exact match on normalized account identifiers.
-
-    meridian_accounts: list of dicts with at least 'accountId'
-    document_accounts: list of dicts with 'accountID' and/or 'accountNumber'
-    """
-    matches = []
-    for m in meridian_accounts:
-        m_norm = normalize_id(m.get("accountId"))
-        if not m_norm:
-            continue
-        for d in document_accounts:
-            candidates = [
-                ("accountID", d.get("accountID")),
-                ("accountNumber", d.get("accountNumber")),
-            ]
-            for field, raw in candidates:
-                if normalize_id(raw) == m_norm:
-                    matches.append({
-                        "meridian_id": m.get("accountId"),
-                        "documents_id": d.get("__id__"),
-                        "matchType": "account_exact",
-                        "confidence": 1.0,
-                        "matchedOn": field,
-                    })
-                    break
-    return matches
-
-
 def match_customers(meridian_customers, document_persons, document_organizations):
     """Match meridian Customers against documents Person/Organization nodes.
 
@@ -160,17 +131,6 @@ def fetch_meridian_customers(session):
     return [dict(r) for r in result]
 
 
-def fetch_meridian_accounts(session):
-    result = session.run(
-        """
-        USE meridianComposite.meridian
-        MATCH (a:Account)
-        RETURN a.accountId AS accountId
-        """
-    )
-    return [dict(r) for r in result]
-
-
 def fetch_document_persons(session):
     # Different extraction runs have stored the person's name under either
     # `name` or `fullName` (e.g. the Rosa's Bakery extraction uses
@@ -235,28 +195,6 @@ def fetch_document_business_plan(session):
                lr.rateType AS rateType, lr.applicationId AS applicationId,
                lr.purpose AS purpose, lr.useOfProceeds AS useOfProceeds,
                lr.marketRationale AS marketRationale, lr.repaymentRationale AS repaymentRationale
-        """
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_document_accounts(session):
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (a:Account)
-        RETURN a.__id__ AS __id__, a.accountID AS accountID, a.accountNumber AS accountNumber
-        """
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_document_properties(session):
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (p:Property)
-        RETURN p.__id__ AS __id__, p.name AS name
         """
     )
     return [dict(r) for r in result]
