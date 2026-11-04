@@ -6,15 +6,14 @@ A Flask web app that resolves entities between two Neo4j graphs — `meridian`
 (structured banking data, exposed as a read-only Aura Virtual Graph) and
 `documents` (a document-intelligence knowledge graph built from unstructured
 documents) — using a Neo4j composite database (`meridianComposite`) as the
-query layer, and Weakly Connected Components (WCC) as the resolution
-algorithm.
+query layer.
 
 Composite database constituents (already provisioned):
 
 - `meridianComposite.meridian` → Aura Virtual Graph, **read-only**
 - `meridianComposite.documents` → Aura standard DB, read/write
 - `meridianComposite.shadowDb` → Aura standard DB, read/write, dedicated to
-  resolution output (shadow nodes, `SIMILAR_TO` edges, WCC results)
+  resolution output (shadow nodes, `SIMILAR_TO` edges)
 
 ## 2. Why a shadow-node pattern
 
@@ -32,21 +31,18 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
 | Source | Label | Key identifying properties |
 |---|---|---|
 | meridian | `Customer` | `customerId`, `customerName`, `ein`, `customerType` |
-| meridian | `Account` | `accountId` |
 | documents | `Person` | `customerID`, `name` |
 | documents | `Organization` | `name` |
-| documents | `Account` | `accountID`, `accountNumber` |
+
+`meridian.Account`/`documents.Account` (exact-id account matching) and
+`documents.Property` were in scope at one point, but this demo's
+`documents` data never actually has `Account`/`Property` nodes, so that
+matching rule and those shadow copies never produced anything — removed
+rather than kept as permanently-dead capability.
 
 ## 4. Matching rules (per entity-type pair)
 
-### 4.1 Account ↔ Account
-- **Signal:** exact match, case-insensitive, on normalized identifier
-  (strip whitespace/dashes/leading zeros).
-- Compare `meridian.Account.accountId` against `documents.Account.accountID`
-  **or** `documents.Account.accountNumber`.
-- This is the highest-confidence match type — treat as ground truth.
-
-### 4.2 Customer ↔ Person
+### 4.1 Customer ↔ Person
 - **Priority 1 (exact):** `meridian.Customer.customerId` ==
   `documents.Person.customerID`, when the `documents.Person` node has a
   non-null `customerID`.
@@ -55,7 +51,7 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
   strip punctuation/whitespace) using token-set similarity, only applied
   when `customerType` indicates an individual. Match if similarity ≥ 0.85.
 
-### 4.3 Customer ↔ Organization
+### 4.2 Customer ↔ Organization
 - **Signal (fuzzy only — no shared key exists in the schema):** normalized
   name similarity between `meridian.Customer.customerName` and
   `documents.Organization.name`, applied when `customerType` indicates a
@@ -63,64 +59,55 @@ read-only (Virtual Graph does not support `CREATE`/`MERGE`/`SET`). So:
   (`inc`, `llc`, `corp`, `co`, `ltd`, punctuation). Match if similarity ≥
   0.85.
 
-### 4.4 Confidence labeling
+### 4.3 Confidence labeling
 Every `SIMILAR_TO` edge must carry:
-- `matchType`: `"account_exact"` | `"customer_exact"` | `"name_fuzzy"`
+- `matchType`: `"customer_exact"` | `"name_fuzzy"`
 - `confidence`: float 0–1 (1.0 for exact matches, similarity score for
   fuzzy matches)
 - `matchedOn`: the property name(s) used
 
 ## 5. Shadow node model (written to `shadowDb`)
 
-### 5.1 Nordtell seeding (run once, outside the app, independent of any document)
-Run via `scripts/seed_shadowdb.py` by hand -- once, or whenever meridian's
-customer/account list changes -- never from the Flask app itself:
-- For every `meridian.Customer` and `meridian.Account`, `MERGE` a shadow
-  node in `shadowDb` labeled `:Shadow:<OriginalLabel>`, with
-  `sourceGraph: "meridian"`, `sourceId` set to the original key
-  (`customerId` / `accountId`), and just enough to display it (`name`) --
-  not a copy of the full record, which stays in `meridian` and is read
-  live when needed (see §2).
-- `MERGE` on `(sourceGraph, sourceId)` so this is idempotent — safe to
-  re-run without creating duplicates.
-- The app (`index()`) only ever reads this seeding's result (a check that
-  it exists, surfacing an error if not) -- it never writes these nodes
-  itself. A page load that could seed on the fly was exactly how stale
-  data kept reappearing: any old copy of the app pointed at the same
-  shared database would silently re-derive and re-write it on every
-  request.
+Nothing is pre-seeded. A `:Shadow` node exists only as the endpoint of a
+real `SIMILAR_TO` match -- matching always runs against data fetched fresh
+from `meridian`/`documents` (never from a pre-existing shadow copy), and
+only once a match is accepted does either side get written to `shadowDb`:
 
-### 5.2 Document-side shadow nodes + linking (triggered by Upload Document)
-For every match found between `documents` and the existing Nordtell shadow
-nodes (§4):
-1. `MERGE` a shadow node in `shadowDb` for the matching `documents` node:
+1. For the matched `meridian.Customer`, `MERGE` a shadow node in
+   `shadowDb` labeled `:Shadow:Customer`, with `sourceGraph: "meridian"`,
+   `sourceId` set to `customerId`, and just enough to display it (`name`)
+   -- not a copy of the full record, which stays in `meridian` and is read
+   live when needed (see §2).
+2. For the matched `documents` node, `MERGE` a shadow node in `shadowDb`:
    `:Shadow:<OriginalLabel>` with `sourceGraph: "documents"` and `sourceId`
-   set to the original key, copying identifying properties.
-2. Connect it to the existing Nordtell shadow node (from §5.1) with
-   `SIMILAR_TO` (properties per §4.4).
-3. Idempotency requirement: re-running the pipeline on the same source data
-   must not create duplicate shadow nodes or edges (`MERGE` on
+   set to the original key, same identity-only shape.
+3. Connect the two with `SIMILAR_TO` (properties per §4.3).
+4. Idempotency requirement: re-running the pipeline on the same source
+   data must not create duplicate shadow nodes or edges (`MERGE` on
    `(sourceGraph, sourceId)` for nodes, and on the node pair for edges).
+5. An entity that never matches anything is never shadowed at all -- the
+   initial "documents-only" canvas view, and anywhere else an unmatched
+   entity needs to be shown, is built from a live read of its own source
+   graph instead (see `graph_data.build_documents_graph`).
+6. On every page load, any `:Shadow` node left with no `SIMILAR_TO` edge
+   (a match from a previous demo run) is deleted, so state never carries
+   from one run into the next.
 
 ## 6. Web app behavior (MVP)
 
-1. **On page load**, the backend only checks that the Nordtell seeding
-   step (§5.1) has already been run (read-only -- it never runs that
-   seeding itself) and surfaces an error if not, then queries `shadowDb`
-   and renders whatever Nordtell shadow nodes already exist as the
-   initial graph view — the user sees these immediately, with no button
-   click required.
+1. **On page load**, the backend clears any `:Shadow` node orphaned by a
+   previous run (§5.6) -- it never writes shadow nodes itself. The canvas
+   starts empty; nothing is shown until a document is uploaded.
 2. The same page has an **Upload Document** button. The document is
    already present on disk for this MVP — the button just triggers the
    rest of the pipeline (no real upload UI needed yet).
-3. On click, the backend runs, in order:
-   a. Candidate matching queries (§4) between `documents` and the existing
-      Nordtell shadow nodes, via the composite database.
-   b. Document-side shadow node + `SIMILAR_TO` creation in `shadowDb`
-      (§5.2).
-4. The page then re-renders the embedded graph view (shadow nodes,
-   `SIMILAR_TO` edges shown) so the user can visually inspect which
-   entities were resolved as the same.
+3. Finding a match (today, the `find_customer` chat tool) runs, in order:
+   a. Candidate matching queries (§4) between `documents` and `meridian`,
+      fetched live, not against any pre-existing shadow copy.
+   b. For each accepted match, shadow node + `SIMILAR_TO` creation in
+      `shadowDb` (§5).
+4. The page then re-renders the embedded graph view so the user can
+   visually inspect which entities were resolved as the same.
 5. Errors at any stage (e.g. composite database unreachable) must surface
    a clear message in the UI, not a stack trace.
 

@@ -50,18 +50,16 @@ def test_run_find_customer_builds_matches_payload_and_applies_matches(monkeypatc
         matching, "fetch_meridian_customers",
         lambda s: [{"customerId": "C001", "customerName": "Rosas Bakery", "customerType": "Business"}],
     )
-    monkeypatch.setattr(matching, "fetch_meridian_accounts", lambda s: [])
     monkeypatch.setattr(matching, "fetch_document_persons", lambda s: [])
     monkeypatch.setattr(
         matching, "fetch_document_organizations",
         lambda s: [{"__id__": "o1", "name": "Rosa's Bakery"}],
     )
-    monkeypatch.setattr(matching, "fetch_document_accounts", lambda s: [])
 
     applied = []
     monkeypatch.setattr(
         shadow_nodes, "apply_document_matches",
-        lambda s, matches, label, lookup: applied.append((label, matches)),
+        lambda s, matches, label, lookup, meridian_lookup: applied.append((label, matches)),
     )
 
     result = chat.run_find_customer(fake_session)
@@ -77,10 +75,8 @@ def test_run_find_customer_builds_matches_payload_and_applies_matches(monkeypatc
 
 def test_run_find_customer_returns_no_matches_cleanly(monkeypatch, fake_session):
     monkeypatch.setattr(matching, "fetch_meridian_customers", lambda s: [])
-    monkeypatch.setattr(matching, "fetch_meridian_accounts", lambda s: [])
     monkeypatch.setattr(matching, "fetch_document_persons", lambda s: [])
     monkeypatch.setattr(matching, "fetch_document_organizations", lambda s: [])
-    monkeypatch.setattr(matching, "fetch_document_accounts", lambda s: [])
     monkeypatch.setattr(shadow_nodes, "apply_document_matches", lambda *a, **k: None)
 
     result = chat.run_find_customer(fake_session)

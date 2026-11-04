@@ -119,22 +119,20 @@ def test_fetch_hierarchy_edges_passes_id_list(fake_session):
     assert set(params["ids"]) == {"C001", "C082"}
 
 
-def test_build_match_delta_labels_customer_and_account_matches():
+def test_build_match_delta_labels_customer_matches():
     matches = [
         {"meridian_id": "C001", "documents_id": "o1", "matchType": "name_fuzzy", "confidence": 1.0},
-        {"meridian_id": "A00001", "documents_id": "a1", "matchType": "account_exact", "confidence": 1.0},
     ]
     meridian_customer_by_id = {"C001": {"customerName": "Rosas Bakery"}}
-    meridian_account_by_id = {"A00001": {"accountId": "A00001"}}
 
-    delta = graph_data.build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id)
+    delta = graph_data.build_match_delta(matches, meridian_customer_by_id)
 
-    assert len(delta["nodes"]) == 2
-    assert len(delta["edges"]) == 2
+    assert len(delta["nodes"]) == 1
+    assert len(delta["edges"]) == 1
     labels = {n["id"]: n["label"] for n in delta["nodes"]}
     assert labels["meridian:C001"] == "Customer: Rosas Bakery"
-    assert labels["meridian:A00001"] == "Account: A00001"
-    edge = next(e for e in delta["edges"] if e["from"] == "meridian:C001")
+    edge = delta["edges"][0]
+    assert edge["from"] == "meridian:C001"
     assert edge["to"] == "documents:o1"
     assert edge["dashes"] is True
 
@@ -506,34 +504,53 @@ def test_fetch_graph_json_merges_similar_to_with_a_live_structural_edge(fake_ses
         "MATCH (n:Shadow)\nRETURN",
         [
             {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"], "name": "Rosa's Bakery"},
-            {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"], "name": None},
+            {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"], "name": "Alvarez Holdings"},
         ],
     )
     fake_session.when("[r:SIMILAR_TO]", [])
-    fake_session.when("OWNS_ACCOUNT", [{"customerId": "C1", "accountId": "A1"}])
+    fake_session.when("HAS_PARENT", [{"customerId": "C1", "parentCustomerId": "C2"}])
 
     graph = graph_data.fetch_graph_json(fake_session)
 
-    assert {n["id"] for n in graph["nodes"]} == {"meridian:C1", "meridian:A1"}
+    assert {n["id"] for n in graph["nodes"]} == {"meridian:C1", "meridian:C2"}
     assert graph["edges"] == [{
-        "from": "meridian:C1", "to": "meridian:A1",
-        "label": "OWNS_ACCOUNT", "title": "OWNS_ACCOUNT", "dashes": False,
+        "from": "meridian:C1", "to": "meridian:C2",
+        "label": "HAS_PARENT", "title": "HAS_PARENT", "dashes": False,
     }]
 
 
-def test_fetch_documents_graph_json_reads_structural_edges_live_not_from_shadowdb(fake_session):
-    fake_session.when(
-        "MATCH (n:Shadow {sourceGraph: 'documents'})",
-        [
-            {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"], "name": "Rosa Alvarez"},
-            {"sourceGraph": "documents", "sourceId": "o1", "labels": ["Shadow", "Organization"], "name": "Rosa's Bakery"},
-        ],
-    )
+def test_fetch_documents_graph_json_is_built_live_not_from_shadowdb(fake_session):
+    persons = [{"__id__": "p1", "name": "Rosa Alvarez"}]
+    organizations = [{"__id__": "o1", "name": "Rosa's Bakery"}]
     fake_session.when("WORKED_AT", [{"personId": "p1", "organizationId": "o1"}])
 
-    graph = graph_data.fetch_documents_graph_json(fake_session)
+    graph = graph_data.fetch_documents_graph_json(fake_session, persons, organizations)
 
-    assert any(c[0].strip().startswith("USE meridianComposite.documents") for c in fake_session.calls[1:])
+    assert {n["id"] for n in graph["nodes"]} == {"documents:p1", "documents:o1"}
+    assert graph["edges"] == [{
+        "from": "documents:p1", "to": "documents:o1",
+        "label": "WORKED_AT", "title": "WORKED_AT", "dashes": False,
+    }]
+    # No read of shadowDb at all -- every call here targets documents/meridian live.
+    assert not any("shadowDb" in q for q, _ in fake_session.calls)
+
+
+def test_build_documents_graph_labels_persons_organizations_and_loan_requests():
+    persons = [{"__id__": "p1", "name": "Rosa Alvarez"}]
+    organizations = [{"__id__": "o1", "name": "Rosa's Bakery"}]
+    loan_requests = [{"__id__": "lr1", "requestedAmount": 400000, "termYears": 10, "rateType": "Fixed"}]
+    edge_rows = [{
+        "fromSourceGraph": "documents", "fromSourceId": "p1",
+        "toSourceGraph": "documents", "toSourceId": "o1",
+        "relType": "WORKED_AT", "confidence": None, "matchType": None,
+    }]
+
+    graph = graph_data.build_documents_graph(persons, organizations, loan_requests, edge_rows)
+
+    labels = {n["id"]: n["label"] for n in graph["nodes"]}
+    assert labels["documents:p1"] == "Person: Rosa Alvarez"
+    assert labels["documents:o1"] == "Organization: Rosa's Bakery"
+    assert labels["documents:lr1"] == "LoanRequest: $400,000 10-yr Fixed Loan Request"
     assert graph["edges"] == [{
         "from": "documents:p1", "to": "documents:o1",
         "label": "WORKED_AT", "title": "WORKED_AT", "dashes": False,

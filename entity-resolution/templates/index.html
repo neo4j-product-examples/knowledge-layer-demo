@@ -884,8 +884,7 @@
         mergeGraphData(data.graph);
         renderGraph();
 
-        const propertyWord = data.propertyCount === 1 ? 'property' : 'properties';
-        addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people, ${data.accountCount} account(s), ${data.propertyCount} ${propertyWord}.`);
+        addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people.`);
         enableChat();
         addSuggestion("Should we approve the $400,000 term loan for Rosa's Bakery? Check it against Nordtell's lending policy.");
       } catch (e) {

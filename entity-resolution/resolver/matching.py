@@ -62,35 +62,6 @@ def is_business(customer_type):
     return any(keyword in lowered for keyword in _BUSINESS_KEYWORDS)
 
 
-def match_accounts(meridian_accounts, document_accounts):
-    """Exact match on normalized account identifiers.
-
-    meridian_accounts: list of dicts with at least 'accountId'
-    document_accounts: list of dicts with 'accountID' and/or 'accountNumber'
-    """
-    matches = []
-    for m in meridian_accounts:
-        m_norm = normalize_id(m.get("accountId"))
-        if not m_norm:
-            continue
-        for d in document_accounts:
-            candidates = [
-                ("accountID", d.get("accountID")),
-                ("accountNumber", d.get("accountNumber")),
-            ]
-            for field, raw in candidates:
-                if normalize_id(raw) == m_norm:
-                    matches.append({
-                        "meridian_id": m.get("accountId"),
-                        "documents_id": d.get("__id__"),
-                        "matchType": "account_exact",
-                        "confidence": 1.0,
-                        "matchedOn": field,
-                    })
-                    break
-    return matches
-
-
 def match_customers(meridian_customers, document_persons, document_organizations):
     """Match meridian Customers against documents Person/Organization nodes.
 
@@ -155,17 +126,6 @@ def fetch_meridian_customers(session):
         MATCH (c:Customer)
         RETURN c.customerId AS customerId, c.customerName AS customerName,
                c.customerType AS customerType
-        """
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_meridian_accounts(session):
-    result = session.run(
-        """
-        USE meridianComposite.meridian
-        MATCH (a:Account)
-        RETURN a.accountId AS accountId
         """
     )
     return [dict(r) for r in result]
@@ -240,28 +200,6 @@ def fetch_document_business_plan(session):
     return [dict(r) for r in result]
 
 
-def fetch_document_accounts(session):
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (a:Account)
-        RETURN a.__id__ AS __id__, a.accountID AS accountID, a.accountNumber AS accountNumber
-        """
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_document_properties(session):
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (p:Property)
-        RETURN p.__id__ AS __id__, p.name AS name
-        """
-    )
-    return [dict(r) for r in result]
-
-
 def fetch_meridian_customer_hierarchy_neighbors_for(session, customer_ids):
     """Customers directly HAS_PARENT-connected (either direction) to any of
     the given ids -- a single hop. The meridian Virtual Graph doesn't
@@ -304,24 +242,6 @@ def fetch_meridian_customer_hierarchy_for(session, customer_ids):
     return [dict(r) for r in result]
 
 
-def fetch_meridian_account_ownership_for(session, customer_ids, account_ids):
-    """Customer-[:OWNS_ACCOUNT]->Account pairs, scoped to customers/accounts
-    already on canvas -- read live from meridian rather than shadow-copied,
-    since both ends already live in the same constituent."""
-    if not customer_ids or not account_ids:
-        return []
-    result = session.run(
-        """
-        USE meridianComposite.meridian
-        MATCH (c:Customer)-[:OWNS_ACCOUNT]->(a:Account)
-        WHERE c.customerId IN $customerIds AND a.accountId IN $accountIds
-        RETURN c.customerId AS customerId, a.accountId AS accountId
-        """,
-        customerIds=list(customer_ids), accountIds=list(account_ids),
-    )
-    return [dict(r) for r in result]
-
-
 def fetch_document_worked_at_for(session, person_ids, organization_ids):
     """Person-[:WORKED_AT]->Organization pairs, scoped to ids already on
     canvas -- read live from documents rather than shadow-copied."""
@@ -335,40 +255,6 @@ def fetch_document_worked_at_for(session, person_ids, organization_ids):
         RETURN p.__id__ AS personId, o.__id__ AS organizationId
         """,
         personIds=list(person_ids), organizationIds=list(organization_ids),
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_document_authorized_for_for(session, person_ids, account_ids):
-    """Person-[:AUTHORIZED_FOR]->Account pairs, scoped to ids already on
-    canvas -- read live from documents rather than shadow-copied."""
-    if not person_ids or not account_ids:
-        return []
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (p:Person)-[:AUTHORIZED_FOR]->(a:Account)
-        WHERE p.__id__ IN $personIds AND a.__id__ IN $accountIds
-        RETURN p.__id__ AS personId, a.__id__ AS accountId
-        """,
-        personIds=list(person_ids), accountIds=list(account_ids),
-    )
-    return [dict(r) for r in result]
-
-
-def fetch_document_co_owns_for(session, person_ids, property_ids):
-    """Person-[:CO_OWNS]->Property pairs, scoped to ids already on canvas --
-    read live from documents rather than shadow-copied."""
-    if not person_ids or not property_ids:
-        return []
-    result = session.run(
-        """
-        USE meridianComposite.documents
-        MATCH (p:Person)-[:CO_OWNS]->(pr:Property)
-        WHERE p.__id__ IN $personIds AND pr.__id__ IN $propertyIds
-        RETURN p.__id__ AS personId, pr.__id__ AS propertyId
-        """,
-        personIds=list(person_ids), propertyIds=list(property_ids),
     )
     return [dict(r) for r in result]
 

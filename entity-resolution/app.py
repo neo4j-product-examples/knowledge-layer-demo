@@ -54,25 +54,22 @@ def get_anthropic_client():
 
 @app.route("/")
 def index():
-    """Never writes shadowDb's meridian-side identity nodes -- that's
-    scripts/seed_shadowdb.py's job, run once outside the app (requirements
-    §5.1). A page load that could seed on the fly is exactly how stale
-    data kept reappearing: every request would silently re-derive and
-    re-merge it, so any old copy of this code pointed at the same shared
-    database would keep writing it back. This just checks (read-only) that
-    seeding has happened, and tells the operator to run the script if not."""
+    """Never writes shadowDb -- a :Shadow node only ever exists as a
+    SIMILAR_TO match endpoint, created lazily the moment find_customer
+    actually matches something (see shadow_nodes.apply_document_matches).
+    A page load just clears any match left over from a previous demo run
+    (and Rosa's own recorded decision) so one run's state never carries
+    into the next."""
     _chat_history.clear()
     try:
         with db.get_session(get_driver()) as session:
-            if not shadow_nodes.meridian_shadow_nodes_exist(session):
-                raise RuntimeError("shadowDb has not been seeded yet")
-            shadow_nodes.clear_document_shadow_data(session)
+            shadow_nodes.clear_orphaned_shadow_nodes(session)
             matching.clear_customer_decisions(session, ROSA_CUSTOMER_ID)
     except Exception:
-        logger.exception("shadowDb is not ready")
+        logger.exception("Failed to reset shadowDb for a new session")
         return render_template("index.html", error=(
-            "shadowDb hasn't been seeded yet, or the composite database is unreachable. "
-            "Run `python3 scripts/seed_shadowdb.py` once, then reload."
+            "Could not reach the composite database. "
+            "Check that the meridianComposite DBMS is running."
         ), bloom_url=BLOOM_URL)
     return render_template("index.html", error=None, bloom_url=BLOOM_URL)
 
@@ -105,44 +102,34 @@ def api_ontology():
 
 @app.route("/api/upload-business-plan", methods=["POST"])
 def upload_business_plan():
-    """Shadows the documents graph's entities (already extracted from the
-    business plan into the `documents` Neo4j graph) and returns just that
-    documents-only slice for the initial canvas view -- their relationships
-    to each other stay in the documents graph itself and are read live by
-    graph_data, not copied in here."""
+    """Returns the documents graph's entities (already extracted from the
+    business plan into the `documents` Neo4j graph) for the initial canvas
+    view -- read live, not shadow-copied. An entity only gets a :Shadow
+    node once find_customer actually matches it to a meridian Customer
+    (see shadow_nodes.apply_document_matches)."""
     _chat_history.clear()
     try:
         with db.get_session(get_driver()) as session:
             document_persons = matching.fetch_document_persons(session)
             document_organizations = matching.fetch_document_organizations(session)
-            document_accounts = matching.fetch_document_accounts(session)
-            document_properties = matching.fetch_document_properties(session)
-            document_loan_requests = matching.fetch_document_loan_requests(session)
 
-            shadow_nodes.seed_document_shadow_nodes(
-                session, document_persons, document_organizations, document_accounts, document_properties,
-                document_loan_requests,
-            )
-
-            graph = graph_data.fetch_documents_graph_json(session)
+            graph = graph_data.fetch_documents_graph_json(session, document_persons, document_organizations)
 
         return jsonify({
             "status": "ok",
             "personCount": len(document_persons),
             "organizationCount": len(document_organizations),
-            "accountCount": len(document_accounts),
-            "propertyCount": len(document_properties),
             "graph": graph,
         })
     except Exception:
-        logger.exception("Failed to shadow documents graph")
-        return jsonify({"error": "Could not shadow the documents graph."}), 500
+        logger.exception("Failed to load documents graph")
+        return jsonify({"error": "Could not load the documents graph."}), 500
 
 
 @app.route("/api/find-customer", methods=["POST"])
 def find_customer():
     """Fuzzy-matches the shadowed documents entities against meridian
-    Customers/Accounts and shadows any matches found as SIMILAR_TO edges."""
+    Customers and shadows any matches found as SIMILAR_TO edges."""
     try:
         with db.get_session(get_driver()) as session:
             result = chat_tools.run_find_customer(session)

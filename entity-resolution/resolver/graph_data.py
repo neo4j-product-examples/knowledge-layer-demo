@@ -1,19 +1,15 @@
-"""Shapes shadowDb's identity graph -- plus each node's real neighborhood,
-read live from its own source graph -- into vis-network-friendly JSON for
-the UI."""
+"""Shapes shadowDb's match-only identity graph -- plus each node's real
+neighborhood, read live from its own source graph -- into
+vis-network-friendly JSON for the UI. An entity that hasn't matched
+anything yet is never in shadowDb at all; unmatched canvas views (e.g. the
+documents-only view right after upload) are built from a live read of the
+source graph instead (see build_documents_graph)."""
 from resolver import matching
 from resolver.shadow_nodes import MATCH_REL_TYPE
 
 _FETCH_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow)
-RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
-       n.name AS name
-"""
-
-_FETCH_DOCUMENTS_NODES = """
-USE meridianComposite.shadowDb
-MATCH (n:Shadow {sourceGraph: 'documents'})
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
        n.name AS name
 """
@@ -80,17 +76,7 @@ def _display_label(row):
     return f"{entity_label}: {name}"
 
 
-def build_vis_graph(node_rows, edge_rows):
-    nodes = {}
-    for row in node_rows:
-        nid = _node_id(row["sourceGraph"], row["sourceId"])
-        nodes[nid] = {
-            "id": nid,
-            "label": _display_label(row),
-            "group": row["sourceGraph"],
-            "color": _GROUP_COLORS.get(row["sourceGraph"], "#999999"),
-        }
-
+def _build_edges(edge_rows):
     edges = []
     for row in edge_rows:
         rel_type = row["relType"]
@@ -102,11 +88,66 @@ def build_vis_graph(node_rows, edge_rows):
             "title": f"confidence: {row.get('confidence')}" if is_match else rel_type,
             "dashes": is_match,
         })
+    return edges
 
-    return {"nodes": list(nodes.values()), "edges": edges}
+
+def build_vis_graph(node_rows, edge_rows):
+    nodes = {}
+    for row in node_rows:
+        nid = _node_id(row["sourceGraph"], row["sourceId"])
+        nodes[nid] = {
+            "id": nid,
+            "label": _display_label(row),
+            "group": row["sourceGraph"],
+            "color": _GROUP_COLORS.get(row["sourceGraph"], "#999999"),
+        }
+    return {"nodes": list(nodes.values()), "edges": _build_edges(edge_rows)}
 
 
-def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
+def _loan_request_display_name(loan_request):
+    if loan_request.get("requestedAmount") is None:
+        return "Loan Request"
+    return (
+        f"${loan_request['requestedAmount']:,.0f} {loan_request.get('termYears')}-yr "
+        f"{loan_request.get('rateType') or ''} Loan Request"
+    ).replace("  ", " ")
+
+
+def build_documents_graph(persons, organizations, loan_requests, edge_rows):
+    """The initial "documents-only" canvas view, right after Upload
+    Business Plan -- built from a live read of the documents graph, not a
+    shadow copy. Nothing here is written to shadowDb; an entity only gets
+    a :Shadow node once find_customer actually matches it to a meridian
+    Customer (see shadow_nodes.apply_document_matches)."""
+    nodes = {}
+    for p in persons:
+        if p.get("__id__") is None:
+            continue
+        nid = _node_id("documents", p["__id__"])
+        nodes[nid] = {
+            "id": nid, "label": f"Person: {p.get('name') or p['__id__']}",
+            "group": "documents", "color": _GROUP_COLORS["documents"],
+        }
+    for o in organizations:
+        if o.get("__id__") is None:
+            continue
+        nid = _node_id("documents", o["__id__"])
+        nodes[nid] = {
+            "id": nid, "label": f"Organization: {o.get('name') or o['__id__']}",
+            "group": "documents", "color": _GROUP_COLORS["documents"],
+        }
+    for lr in loan_requests:
+        if lr.get("__id__") is None:
+            continue
+        nid = _node_id("documents", lr["__id__"])
+        nodes[nid] = {
+            "id": nid, "label": f"LoanRequest: {_loan_request_display_name(lr)}",
+            "group": "documents", "color": _GROUP_COLORS["documents"],
+        }
+    return {"nodes": list(nodes.values()), "edges": _build_edges(edge_rows)}
+
+
+def build_match_delta(matches, meridian_customer_by_id):
     """Graph delta revealing the meridian side of each match (the documents
     side is assumed already on the canvas from the documents-only view)."""
     nodes = {}
@@ -116,8 +157,6 @@ def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
         nid = _node_id("meridian", meridian_id)
         if meridian_id in meridian_customer_by_id:
             label = f"Customer: {meridian_customer_by_id[meridian_id].get('customerName')}"
-        elif meridian_id in meridian_account_by_id:
-            label = f"Account: {meridian_id}"
         else:
             label = meridian_id
         nodes[nid] = {
@@ -639,34 +678,23 @@ def _ids_by_source_and_label(node_rows):
     return ids
 
 
-def _fetch_live_structural_edges(session, node_rows):
+def _fetch_structural_edges_for_ids(session, customer_ids=(), person_ids=(), org_ids=(), loan_request_ids=()):
     """The canvas's "connected neighborhood around a match" used to come
     from a copy of these relationships stored in shadowDb. They're read
     live from their real source graph instead (meridian/documents), scoped
-    to whichever nodes are already shadowed -- every one of them already
-    lives entirely inside one constituent, so none of them ever actually
-    needed shadowing; only SIMILAR_TO (a genuine cross-constituent link)
-    does."""
-    ids = _ids_by_source_and_label(node_rows)
-    customer_ids = ids.get(("meridian", "Customer"), [])
-    account_ids = ids.get(("meridian", "Account"), [])
-    person_ids = ids.get(("documents", "Person"), [])
-    org_ids = ids.get(("documents", "Organization"), [])
-    doc_account_ids = ids.get(("documents", "Account"), [])
-    property_ids = ids.get(("documents", "Property"), [])
-    loan_request_ids = ids.get(("documents", "LoanRequest"), [])
+    to exactly the ids given -- every one of them already lives entirely
+    inside one constituent, so none of them ever actually needed
+    shadowing; only SIMILAR_TO (a genuine cross-constituent link) does.
 
+    OWNS_ACCOUNT/AUTHORIZED_FOR/CO_OWNS used to be read here too, but
+    Account/Property are no longer shadowed at all (never matched with
+    this demo's data -- see the Account/Property-matching-removal commit),
+    so those edges could never be scoped to anything on canvas."""
     edges = []
-    for row in matching.fetch_meridian_account_ownership_for(session, customer_ids, account_ids):
-        edges.append(("meridian", row["customerId"], "meridian", row["accountId"], "OWNS_ACCOUNT"))
     for row in matching.fetch_meridian_customer_hierarchy_for(session, customer_ids):
         edges.append(("meridian", row["customerId"], "meridian", row["parentCustomerId"], "HAS_PARENT"))
     for row in matching.fetch_document_worked_at_for(session, person_ids, org_ids):
         edges.append(("documents", row["personId"], "documents", row["organizationId"], "WORKED_AT"))
-    for row in matching.fetch_document_authorized_for_for(session, person_ids, doc_account_ids):
-        edges.append(("documents", row["personId"], "documents", row["accountId"], "AUTHORIZED_FOR"))
-    for row in matching.fetch_document_co_owns_for(session, person_ids, property_ids):
-        edges.append(("documents", row["personId"], "documents", row["propertyId"], "CO_OWNS"))
     for row in matching.fetch_document_ownership_for(session, person_ids, org_ids):
         edges.append(("documents", row["personId"], "documents", row["organizationId"], "OWNS"))
     for row in matching.fetch_document_requests_for(session, org_ids, loan_request_ids):
@@ -682,6 +710,20 @@ def _fetch_live_structural_edges(session, node_rows):
     ]
 
 
+def _fetch_live_structural_edges(session, node_rows):
+    """Same as _fetch_structural_edges_for_ids, scoped to whichever ids are
+    already shadowed on canvas (fetch_graph_json's use case) rather than a
+    caller-supplied id list."""
+    ids = _ids_by_source_and_label(node_rows)
+    return _fetch_structural_edges_for_ids(
+        session,
+        customer_ids=ids.get(("meridian", "Customer"), []),
+        person_ids=ids.get(("documents", "Person"), []),
+        org_ids=ids.get(("documents", "Organization"), []),
+        loan_request_ids=ids.get(("documents", "LoanRequest"), []),
+    )
+
+
 def fetch_graph_json(session):
     node_rows = [dict(r) for r in session.run(_FETCH_NODES)]
     match_edge_rows = [dict(r) for r in session.run(_FETCH_SIMILAR_TO_EDGES)]
@@ -689,10 +731,22 @@ def fetch_graph_json(session):
     return build_vis_graph(node_rows, match_edge_rows + structural_edge_rows)
 
 
-def fetch_documents_graph_json(session):
-    node_rows = [dict(r) for r in session.run(_FETCH_DOCUMENTS_NODES)]
-    structural_edge_rows = _fetch_live_structural_edges(session, node_rows)
-    return build_vis_graph(node_rows, structural_edge_rows)
+def fetch_documents_graph_json(session, persons, organizations):
+    """The initial canvas view right after Upload Business Plan, read live
+    -- nothing is shadow-copied until find_customer actually matches it
+    (see shadow_nodes.apply_document_matches). persons/organizations are
+    passed in already-fetched so this doesn't re-query documents a second
+    time in the same request."""
+    loan_requests = matching.fetch_document_loan_requests(session)
+
+    person_ids = [p["__id__"] for p in persons if p.get("__id__") is not None]
+    org_ids = [o["__id__"] for o in organizations if o.get("__id__") is not None]
+    loan_request_ids = [lr["__id__"] for lr in loan_requests if lr.get("__id__") is not None]
+
+    edge_rows = _fetch_structural_edges_for_ids(
+        session, person_ids=person_ids, org_ids=org_ids, loan_request_ids=loan_request_ids,
+    )
+    return build_documents_graph(persons, organizations, loan_requests, edge_rows)
 
 
 def fetch_hierarchy_neighborhood(session, customer_id, max_hops=4):
