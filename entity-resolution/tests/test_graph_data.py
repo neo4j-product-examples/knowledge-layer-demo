@@ -5,11 +5,11 @@ def test_build_vis_graph_dedupes_nodes_and_preserves_edge_direction():
     node_rows = [
         {
             "sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-            "componentId": 0, "name": "Jane Doe",
+            "name": "Jane Doe",
         },
         {
             "sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"],
-            "componentId": 0, "name": "Jane Doe",
+            "name": "Jane Doe",
         },
     ]
     edge_rows = [
@@ -35,9 +35,9 @@ def test_build_vis_graph_keeps_structural_edge_direction_even_when_ids_sort_the_
     # relationship is Customer -[:OWNS_ACCOUNT]-> Account.
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-         "componentId": 0, "name": "Jane Doe"},
+         "name": "Jane Doe"},
         {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"],
-         "componentId": 0, "name": None},
+         "name": None},
     ]
     edge_rows = [
         {"fromSourceGraph": "meridian", "fromSourceId": "C1",
@@ -55,9 +55,9 @@ def test_build_vis_graph_keeps_structural_edge_direction_even_when_ids_sort_the_
 def test_build_vis_graph_marks_match_edges_as_dashed():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"],
-         "componentId": 0, "name": "Jane Doe"},
+         "name": "Jane Doe"},
         {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"],
-         "componentId": 0, "name": "Jane Doe"},
+         "name": "Jane Doe"},
     ]
     edge_rows = [
         {"fromSourceGraph": "meridian", "fromSourceId": "C1",
@@ -259,7 +259,7 @@ def test_build_relationship_manager_delta_labels_name_and_role():
     assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
     assert nodes_by_id["meridian:EMP002"] == {
         "id": "meridian:EMP002", "label": "Jamie Arnold (Relationship Manager)",
-        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"],
     }
     assert delta["edges"] == [{
         "from": "meridian:C001", "to": "meridian:EMP002",
@@ -478,7 +478,7 @@ def test_build_new_case_steps_handles_no_failed_rules():
 def test_build_vis_graph_handles_node_with_no_edges():
     node_rows = [
         {"sourceGraph": "meridian", "sourceId": "C2", "labels": ["Shadow", "Customer"],
-         "componentId": 1, "name": "Solo Corp"},
+        "name": "Solo Corp"},
     ]
 
     graph = graph_data.build_vis_graph(node_rows, [])
@@ -505,8 +505,8 @@ def test_fetch_graph_json_merges_similar_to_with_a_live_structural_edge(fake_ses
     fake_session.when(
         "MATCH (n:Shadow)\nRETURN",
         [
-            {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"], "componentId": None, "name": "Rosa's Bakery"},
-            {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"], "componentId": None, "name": None},
+            {"sourceGraph": "meridian", "sourceId": "C1", "labels": ["Shadow", "Customer"], "name": "Rosa's Bakery"},
+            {"sourceGraph": "meridian", "sourceId": "A1", "labels": ["Shadow", "Account"], "name": None},
         ],
     )
     fake_session.when("[r:SIMILAR_TO]", [])
@@ -525,8 +525,8 @@ def test_fetch_documents_graph_json_reads_structural_edges_live_not_from_shadowd
     fake_session.when(
         "MATCH (n:Shadow {sourceGraph: 'documents'})",
         [
-            {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"], "componentId": None, "name": "Rosa Alvarez"},
-            {"sourceGraph": "documents", "sourceId": "o1", "labels": ["Shadow", "Organization"], "componentId": None, "name": "Rosa's Bakery"},
+            {"sourceGraph": "documents", "sourceId": "p1", "labels": ["Shadow", "Person"], "name": "Rosa Alvarez"},
+            {"sourceGraph": "documents", "sourceId": "o1", "labels": ["Shadow", "Organization"], "name": "Rosa's Bakery"},
         ],
     )
     fake_session.when("WORKED_AT", [{"personId": "p1", "organizationId": "o1"}])

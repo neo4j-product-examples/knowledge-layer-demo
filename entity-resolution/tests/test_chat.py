@@ -174,7 +174,7 @@ def test_run_get_customer_loan_applications_filters_by_customer(monkeypatch, fak
     assert nodes_by_id["meridian:C001"]["label"] == "Customer: C001"
     assert nodes_by_id["meridian:APP-3001"] == {
         "id": "meridian:APP-3001", "label": "Loan Application: APP-3001 (Under Review)",
-        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"], "componentId": None,
+        "group": "meridian", "color": graph_data._GROUP_COLORS["meridian"],
     }
     assert result["graph"]["edges"] == [{
         "from": "meridian:C001", "to": "meridian:APP-3001",

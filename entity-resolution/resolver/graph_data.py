@@ -8,14 +8,14 @@ _FETCH_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow)
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
-       n.componentId AS componentId, n.name AS name
+       n.name AS name
 """
 
 _FETCH_DOCUMENTS_NODES = """
 USE meridianComposite.shadowDb
 MATCH (n:Shadow {sourceGraph: 'documents'})
 RETURN n.sourceGraph AS sourceGraph, n.sourceId AS sourceId, labels(n) AS labels,
-       n.componentId AS componentId, n.name AS name
+       n.name AS name
 """
 
 # Directed MATCH (not `-[r]-`) so `from`/`to` reflect the relationship's real
@@ -71,7 +71,6 @@ def _customer_stub_node(customer_id):
         "label": f"Customer: {customer_id}",
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }
 
 
@@ -90,7 +89,6 @@ def build_vis_graph(node_rows, edge_rows):
             "label": _display_label(row),
             "group": row["sourceGraph"],
             "color": _GROUP_COLORS.get(row["sourceGraph"], "#999999"),
-            "componentId": row.get("componentId"),
         }
 
     edges = []
@@ -127,7 +125,6 @@ def build_match_delta(matches, meridian_customer_by_id, meridian_account_by_id):
             "label": label,
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         }
         edges.append({
             "from": nid,
@@ -153,7 +150,6 @@ def build_hierarchy_delta(hierarchy_rows, edge_rows, risk_customer_ids=None):
             "label": f"Customer: {row.get('customerName') or source_id}",
             "group": "meridian",
             "color": _RISK_COLOR if source_id in risk_customer_ids else _GROUP_COLORS["meridian"],
-            "componentId": None,
         }
     edges = [
         {
@@ -189,7 +185,6 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
             "label": f"KYC: {kyc.get('riskRating') or 'Unknown'}",
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -207,7 +202,6 @@ def build_risk_profile_delta(customer_id, kyc, facilities):
             "label": f"Loan Facility: {f['facilityId']} ({f.get('paymentStatus')})",
             "group": "meridian",
             "color": _RISK_COLOR if is_delinquent else _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -235,7 +229,6 @@ def build_credit_score_delta(customer_id, latest_score):
         "label": f"Credit Score: {latest_score.get('creditScore')} ({latest_score.get('scoreBand')})",
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -265,7 +258,6 @@ def build_loan_application_delta(customer_id, applications):
             "label": f"Loan Application: {application['applicationId']} ({application.get('status')})",
             "group": "meridian",
             "color": _GROUP_COLORS["meridian"],
-            "componentId": None,
         })
         edges.append({
             "from": customer_node_id,
@@ -292,7 +284,6 @@ def build_transaction_summary_delta(customer_id, summary):
         "label": f"Transactions: {summary['transactionCount']} (net {'-' if net < 0 else '+'}${abs(net):,.2f})",
         "group": "meridian",
         "color": _RISK_COLOR if net < 0 else _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -321,7 +312,6 @@ def build_relationship_manager_delta(customer_id, relationship_manager):
         "label": f"{name} ({role})" if role else name,
         "group": "meridian",
         "color": _GROUP_COLORS["meridian"],
-        "componentId": None,
     }]
     edges = [{
         "from": _node_id("meridian", customer_id),
@@ -355,7 +345,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
             "label": section_label,
             "group": "policy",
             "color": _GROUP_COLORS["policy"],
-            "componentId": None,
         },
     ]
     edges = [{
@@ -373,7 +362,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
             "label": f"{rule['ruleId']}: {rule.get('criterion')}",
             "group": "policy",
             "color": _GROUP_COLORS["policy"],
-            "componentId": None,
         })
         edges.append({
             "from": section_node_id,
@@ -390,7 +378,6 @@ def build_lending_policy_delta(customer_id, product_type_code, rules):
                 "label": rule["escalationRole"],
                 "group": "policy",
                 "color": _RISK_COLOR,
-                "componentId": None,
             })
             edges.append({
                 "from": rule_node_id,
@@ -425,7 +412,6 @@ def build_policy_failure_delta(customer_id, failed_rules):
             "label": f"{rule['ruleId']}: {rule.get('criterion')} (Failed)",
             "group": "policy",
             "color": _RISK_COLOR,
-            "componentId": None,
         })
         edges.append({
             "from": _node_id("meridian", customer_id),
@@ -458,7 +444,6 @@ def build_decision_delta(decisions):
             "label": f"{decision['recommendation']}: {decision.get('customerName') or decision['customerId']}",
             "group": "context",
             "color": _decision_color(decision),
-            "componentId": None,
         }
     return {"nodes": list(nodes.values()), "edges": []}
 
@@ -472,7 +457,6 @@ def _case_node(decision):
         "label": f"Case: {decision.get('customerName') or decision['customerId']}",
         "group": "context",
         "color": _GROUP_COLORS["context"],
-        "componentId": None,
     }
 
 
@@ -485,7 +469,6 @@ def _outcome_node(decision):
         "label": decision["recommendation"],
         "group": "context",
         "color": _decision_color(decision),
-        "componentId": None,
     }
 
 
@@ -499,7 +482,6 @@ def _shadow_rule_node(rule_id, criterion):
         "label": f"{rule_id}: {criterion or rule_id}",
         "group": "context",
         "color": _GROUP_COLORS["context"],
-        "componentId": None,
     }
 
 

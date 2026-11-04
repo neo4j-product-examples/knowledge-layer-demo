@@ -97,16 +97,7 @@ nodes (§4):
    must not create duplicate shadow nodes or edges (`MERGE` on
    `(sourceGraph, sourceId)` for nodes, and on the node pair for edges).
 
-## 6. Weakly Connected Components step
-
-- After shadow nodes + `SIMILAR_TO` edges exist in `shadowDb`, run WCC
-  over that graph (Neo4j GDS `gds.wcc` if the GDS plugin is available on
-  that Aura instance; otherwise a pure-Cypher fallback implementation).
-- Write the resulting `componentId` back onto each shadow node.
-- Two shadow nodes in the same component are considered **the same
-  real-world entity** across `meridian` and `documents`.
-
-## 7. Web app behavior (MVP)
+## 6. Web app behavior (MVP)
 
 1. **On startup**, the backend runs the Nordtell seeding step (§5.1) if
    needed. **On page load**, the app queries `shadowDb` and renders
@@ -120,16 +111,15 @@ nodes (§4):
       Nordtell shadow nodes, via the composite database.
    b. Document-side shadow node + `SIMILAR_TO` creation in `shadowDb`
       (§5.2).
-   c. WCC over `shadowDb` (§6).
-4. The page then re-renders the embedded graph view (shadow nodes colored
-   by `componentId`, `SIMILAR_TO` edges shown) so the user can visually
-   inspect which entities were resolved as the same.
+4. The page then re-renders the embedded graph view (shadow nodes,
+   `SIMILAR_TO` edges shown) so the user can visually inspect which
+   entities were resolved as the same.
 5. Errors at any stage (e.g. composite database unreachable) must surface
    a clear message in the UI, not a stack trace.
 
-## 8. Testing strategy (TDD)
+## 7. Testing strategy (TDD)
 
-- All matching, shadow-node, and WCC logic must be unit-testable without a
+- All matching and shadow-node logic must be unit-testable without a
   live Neo4j connection — the Neo4j driver/session is injected and mocked
   in tests.
 - Test coverage required before implementation is considered done:
@@ -137,11 +127,10 @@ nodes (§4):
   - Match-candidate query construction for each of the three entity-type
     pairs.
   - Shadow node/edge Cypher generation and idempotency (`MERGE` semantics).
-  - WCC result parsing and component assignment.
 - A small number of integration tests may run against the real composite
   database, gated behind an environment flag, not run by default in CI.
 
-## 9. Out of scope (for this MVP)
+## 8. Out of scope (for this MVP)
 - Real file upload / document ingestion pipeline.
 - Authentication.
 - Editing/correcting matches from the UI.
