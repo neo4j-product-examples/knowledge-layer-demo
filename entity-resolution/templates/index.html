@@ -841,12 +841,12 @@
       return div;
     }
 
-    function addSuggestion(text) {
+    function addSuggestion(text, labelText = 'Recommended follow up: ') {
       const wrapper = document.createElement('div');
       wrapper.className = 'suggestion';
       const label = document.createElement('span');
       label.className = 'suggestion-label';
-      label.textContent = 'Recommended follow up: ';
+      label.textContent = labelText;
       const value = document.createElement('span');
       value.className = 'suggestion-text';
       value.textContent = text;
@@ -859,6 +859,22 @@
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return wrapper;
     }
+
+    // Lets someone build up the picture one graph at a time (banking data,
+    // then policy, then precedent) instead of asking for everything in one
+    // shot. Keyed by the exact message just sent -- after each step's
+    // answer comes back, we show the next one as a clickable suggestion.
+    // The model itself (see SYSTEM_PROMPT) recognizes these request shapes
+    // by their intent, not by this exact wording, so typing something
+    // similar by hand works too; this chain is just a convenience.
+    const STEP_BY_STEP_FOLLOW_UPS = {
+      "Retrieve relevant banking data from Databricks for Rosa's Bakery, including any parent companies.":
+        'Retrieve relevant loan policies for this loan request.',
+      'Retrieve relevant loan policies for this loan request.':
+        'Find past decisions relevant to this loan.',
+      'Find past decisions relevant to this loan.':
+        "Should we approve the $400,000 term loan for Rosa's Bakery?",
+    };
 
     function enableChat(placeholder = 'Ask a question…') {
       chatInput.value = '';
@@ -887,6 +903,10 @@
         addMessage('assistant', `Loaded the business plan: ${data.organizationCount} organization(s), ${data.personCount} people.`);
         enableChat();
         addSuggestion("Should we approve the $400,000 term loan for Rosa's Bakery? Check it against Nordtell's lending policy.");
+        addSuggestion(
+          "Retrieve relevant banking data from Databricks for Rosa's Bakery, including any parent companies.",
+          'Or build up the picture step by step: ',
+        );
       } catch (e) {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Business Plan';
@@ -980,6 +1000,9 @@
               if (event.graph && event.graph.nodes && event.graph.nodes.length) {
                 mergeGraphData(event.graph);
                 renderGraph();
+              }
+              if (STEP_BY_STEP_FOLLOW_UPS[text]) {
+                addSuggestion(STEP_BY_STEP_FOLLOW_UPS[text], 'Next: ');
               }
             } else if (event.type === 'error') {
               handled = true;
